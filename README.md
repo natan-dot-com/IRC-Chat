@@ -1,4 +1,4 @@
-# Computer Networks - IRC Chat
+# Computer Networks - Internet Relay Chat
 
 Tested in Debian 11 '_Bullseye_' and Windows 11. Compiled with G++11.
 
