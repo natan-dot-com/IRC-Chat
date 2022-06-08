@@ -46,7 +46,6 @@ int main() {
                 std::cout << "client " << id << " connected" << std::endl;
 
                 auto write_msg = [&](std::string s) mutable {
-                    std::cout << "recvd message " << std::quoted(s) << std::endl;
                     messages.push_back(id, std::move(s));
 
                     // Just received a message. Notify all other clients.

@@ -1,3 +1,5 @@
+#include <curses.h>
+
 #include "utils.hpp"
 
 std::mutex printMutex;

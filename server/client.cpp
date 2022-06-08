@@ -54,6 +54,7 @@ client::poll_result client::poll_recv() {
     _write_msg(std::move(s));
 
     _recv_buf.clear();
+    _recv_idx = 0;
     std::fill_n(std::back_inserter(_recv_buf), BUFSIZ, 0);
 
     return poll_result::pending;
@@ -70,7 +71,6 @@ client::poll_result client::poll_send() {
             }
             _send_buf = *opt_msg;
         }
-        std::cout << "Seding " << std::quoted(_send_buf) << std::endl;
         ssize_t n_sent = _stream.nonblocking_send((const uint8_t*)_send_buf.data(), _send_buf.size());
 
         if (n_sent < 0) {
