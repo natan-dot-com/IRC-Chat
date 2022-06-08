@@ -42,4 +42,3 @@ int Client::s_recv(std::string *rsp) {
     *rsp = std::string(writable.cbegin(), writable.cbegin() + bytesRead);
     return bytesRead;
 }
-
