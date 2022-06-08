@@ -16,27 +16,11 @@ int Client::s_connect(int serverPort) {
 }
 
 int Client::s_send(std::string msg) {
-    struct timeval tv;
-    tv.tv_sec = SEND_TIMEOUT;
-    tv.tv_usec = 0;
-
-    if (setsockopt(id, SOL_SOCKET, SO_RCVTIMEO, (char *)& tv, sizeof(tv)) < 0) {
-        return -1;
-    }
-
     return send(id, msg.c_str(), msg.length(), 0);
 }
 
 int Client::s_recv(std::string *rsp) {
     std::vector<char> writable(MAX_SIZE);
-
-    struct timeval tv;
-    tv.tv_sec = RECV_TIMEOUT;
-    tv.tv_usec = 0;
-
-    if (setsockopt(id, SOL_SOCKET, SO_RCVTIMEO, (char *)& tv, sizeof(tv)) < 0) {
-        return -1;
-    }
 
     int bytesRead = recv(id, writable.data(), MAX_SIZE, 0);
     *rsp = std::string(writable.cbegin(), writable.cbegin() + bytesRead);
