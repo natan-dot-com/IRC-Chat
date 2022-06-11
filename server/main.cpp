@@ -3,7 +3,7 @@
 #include <vector>
 #include <algorithm>
 #include <optional>
-#include <iomanip>
+#include <memory>
 
 #include <csignal>
 #include <cstring>
@@ -15,10 +15,26 @@
 #include "poll_register.hpp"
 #include "server.hpp"
 #include "client.hpp"
+#include "utils.hpp"
 
 #define PORT 8080
 
+void poll_server(server& server, std::shared_ptr<message_queue> messages, std::vector<client>& clients) {
+    size_t id = clients.size();
+
+    std::cout << "client " << id << " connected" << std::endl;
+
+    auto stream = server.accept();
+    auto& client = clients.emplace_back(std::move(stream), id, messages);
+
+    // Poll the client without any specific event. This will allow it to check
+    // if there are messages it should send.
+    client.poll(0);
+}
+
 int main() {
+    // Interrupt handler that only sets a quit flag when run. This code is not
+    // multithreaded and this shouldn't cause many problems.
     static volatile std::sig_atomic_t quit = false;
     std::signal(SIGINT, [](int){ quit = true;});
 
@@ -26,62 +42,42 @@ int main() {
     server.start();
     std::cout << "Listening localhost, port " << PORT << std::endl;
 
-    poll_register reg;
-
-    reg.register_event(server.fd(), POLLIN);
-
-    message_queue messages;
-    std::vector<poll_ev> events;
+    auto messages = std::make_shared<message_queue>();
     std::vector<client> clients;
 
-    for (;;) {
-        int ret = reg.poll(events);
-        if (ret == -1 && errno == EINTR && quit) break;
+    poll_register::instance().register_event(server.fd(), POLLIN);
+    poll_register::instance()
+        .register_callback(server.fd(),
+            [&](short) {
+                poll_server(server, messages, clients);
+            });
 
-        for (const auto& ev : events) {
-            if (ev.fd == server.fd()) {
+    while (!quit) {
+        size_t n_msgs = messages->size();
 
-                size_t id = clients.size();
-
-                std::cout << "client " << id << " connected" << std::endl;
-
-                auto write_msg = [&](std::string s) mutable {
-                    messages.push_back(id, std::move(s));
-
-                    // Just received a message. Notify all other clients.
-                    for (auto& client : clients) client.notify_new_messages();
-                };
-
-                auto read_msg = [&, it=messages.cbegin()]() mutable -> std::optional<std::string_view> {
-                    if (it == messages.cend()) return std::nullopt;
-                    return (*it++).content;
-                };
-
-                auto stream = server.accept();
-                auto& client = clients.emplace_back(std::move(stream), id, reg, std::move(read_msg), std::move(write_msg));
-                if (messages.size() > 0) client.notify_new_messages();
-            } else {
-                // Find the client that was waiting on the notification.
-                auto it = std::find_if(clients.begin(), clients.end(),
-                                       [&](auto& client){return ev.fd == client.raw_fd();});
-
-                // If no client was found, move on. This really shuldn't happen, but it's not a big deal.
-                if (it == clients.end()) continue;
-                size_t id = std::distance(clients.begin(), it);
-                auto& client = *it;
-
-                switch (client.poll(ev.events)) {
-                    case client::poll_result::closed:
-                        std::cout << "client " << id << " disconnected" << std::endl;
-                        // Remove the client from the list, destructor will do the closing of file descriptors
-                        clients.erase(it);
-                        break;
-
-                    case client::poll_result::pending: break;
-                }
-            }
+        // If the poll call failed because of an interrupt, skip this iteration
+        // of the loop. Note that if the SIGINT signal was the cause, the `quit`
+        // flag will be set ant the loop will exit. If any other error occurs,
+        // throw.
+        if (poll_register::instance().poll_and_dispatch() < 0) {
+            if (errno == EINTR) continue;
+            THROW_ERRNO("poll failed");
         }
-        events.clear();
+
+        // Use `partition` instead of `reamove_if` because this algorithm will
+        // perform less swaps, and we don't care about the order of clients.
+        auto it = std::partition(clients.begin(), clients.end(),
+                                 [](auto& cli) { return cli.is_connected(); });
+
+        // Delete disconnected clients.
+        clients.erase(it, clients.end());
+
+        // New messages have been added, poll every client again without any
+        // particular event. This will make them check if there are any new
+        // messages they want to start sending.
+        if (messages->size() > n_msgs) {
+            for (auto& client : clients) client.poll(0);
+        }
     }
 
     // All `tcpstream` destructors will run, closing any open connections.

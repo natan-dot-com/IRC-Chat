@@ -22,7 +22,12 @@ server::server(server&& rhs)
     rhs._init = false;
 }
 
-server::~server() { if (_init) shutdown(_fd, SHUT_RDWR); }
+server::~server() {
+    if (_init) {
+        shutdown(_fd, SHUT_RDWR);
+        close(_fd);
+    }
+}
 
 void server::start() {
     _fd = socket(AF_INET, SOCK_STREAM, 0);

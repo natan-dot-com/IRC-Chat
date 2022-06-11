@@ -2,9 +2,11 @@ BUILDDIR := build
 
 SERVER_DEPS  = $(BUILDDIR)/server/client.o $(BUILDDIR)/server/main.o
 SERVER_DEPS += $(BUILDDIR)/server/poll_register.o $(BUILDDIR)/server/server.o
-SERVER_DEPS += $(BUILDDIR)/server/tcpstream.o
+SERVER_DEPS += $(BUILDDIR)/server/tcpstream.o $(BUILDDIR)/server/message_queue.o
 
 CLIENT_DEPS  = $(BUILDDIR)/client/client.o $(BUILDDIR)/client/main.o $(BUILDDIR)/client/utils.o
+
+CFLAGS = -g -std=c++17
 
 all: server client
 
@@ -23,16 +25,16 @@ client: $(BUILDDIR)/client/main
 
 
 $(BUILDDIR)/server/main: $(SERVER_DEPS)  | $(BUILDDIR)
-	g++ -g -std=c++17 $^ -o $@ -lpthread
+	g++ $(CFLAGS) $^ -o $@ -lpthread
 
 $(BUILDDIR)/client/main: $(CLIENT_DEPS) | $(BUILDDIR)
-	g++ -g -std=c++17 $^ -o $@ -lpthread -lncurses
+	g++ $(CFLAGS) $^ -o $@ -lpthread -lncurses
 
 $(BUILDDIR)/client/%.o: client/%.cpp client/*.hpp | $(BUILDDIR)
-	g++ -c -g -std=c++17 $< -o $@
+	g++ -c $(CFLAGS) $< -o $@
 
 $(BUILDDIR)/server/%.o: server/%.cpp server/*.hpp | $(BUILDDIR)
-	g++ -c -g -std=c++17 $< -o $@
+	g++ -c $(CFLAGS) $< -o $@
 
 
 

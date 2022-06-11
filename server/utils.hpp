@@ -8,7 +8,7 @@
 #define THROW_ERRNO(msg) \
     do { \
         std::ostringstream ss; \
-        ss << msg << "(" << strerror(errno) << ")" << " at " << __FILE__ << ":" << __LINE__ << std::endl; \
+        ss << msg << " (" << strerror(errno) << ")" << " at " << __FILE__ << ":" << __LINE__ << std::endl; \
         throw std::runtime_error(ss.str()); \
     } while (0)
 
