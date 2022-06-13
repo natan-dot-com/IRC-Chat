@@ -2,20 +2,22 @@
 #include <iostream>
 
 #include "tcpstream.hpp"
-#include "client.hpp"
+#include "connection.hpp"
 #include "utils.hpp"
 #include "poll_register.hpp"
 
-void client::register_callback() {
+using namespace irc;
+
+void connection::register_callback() {
     // WARNING: This closure carries a reference to `this` which may not live as
     // long as the static reference `poll_register::instance()`. Meaning if
     // `this` is moved, we MUST also update the closure with a new reference to
     // the new location of `this`.
-    poll_register::instance()
+    poll_registry::instance()
         .register_callback(raw_fd(), [&](short events) { this->poll(events); });
 }
 
-client::client(tcpstream stream, size_t id, std::shared_ptr<message_queue> messages)
+connection::connection(tcpstream stream, size_t id, std::shared_ptr<message_queue> messages)
     : _stream(std::move(stream))
     , _messages(messages)
     , _id(id)
@@ -25,7 +27,7 @@ client::client(tcpstream stream, size_t id, std::shared_ptr<message_queue> messa
     register_callback();
 }
 
-client::client(client&& rhs)
+connection::connection(connection&& rhs)
     : _stream(std::move(rhs._stream))
     , _messages(rhs._messages)
     , _id(rhs._id)
@@ -36,7 +38,7 @@ client::client(client&& rhs)
     register_callback();
 }
 
-client& client::operator=(client&& rhs) {
+connection& connection::operator=(connection&& rhs) {
     _recv_buf = std::move(rhs._recv_buf);
     _recv_idx = rhs._recv_idx;
     _send_buf = std::move(rhs._send_buf);
@@ -51,13 +53,13 @@ client& client::operator=(client&& rhs) {
     return *this;
 }
 
-client::~client() {
+connection::~connection() {
     if (is_connected()) {
-        poll_register::instance().unregister_fd(_stream.fd());
+        poll_registry::instance().unregister_fd(_stream.fd());
     }
 }
 
-void client::poll_recv() {
+void connection::poll_recv() {
     ssize_t n_recv = _stream.nonblocking_recv(_recv_buf.data() + _recv_idx, _recv_buf.size() - _recv_idx);
     if (n_recv == 0) {
         disconnect();
@@ -109,7 +111,7 @@ void client::poll_recv() {
     return;
 }
 
-void client::poll_send() {
+void connection::poll_send() {
     while (1) {
         // If we have nothing to send, check if there is any new message in the channel.
         if (_send_buf.empty()) {
@@ -142,37 +144,37 @@ void client::poll_send() {
     }
 }
 
-void client::poll(short events) {
+void connection::poll(short events) {
     // There are new messages inthe queue, we want to start sending them to the client.
     if (has_new_messages()) register_for_poll(POLLOUT);
     if (events & POLLIN ) poll_recv();
     if (events & POLLOUT) poll_send();
 }
 
-void client::register_for_poll(short events) {
-    poll_register::instance().register_event(raw_fd(), events);
+void connection::register_for_poll(short events) {
+    poll_registry::instance().register_event(raw_fd(), events);
 }
 
-void client::unregister_for_poll(short events) {
-    poll_register::instance().unregister_event(raw_fd(), events);
+void connection::unregister_for_poll(short events) {
+    poll_registry::instance().unregister_event(raw_fd(), events);
 }
 
-int client::raw_fd() const { return _stream.fd(); }
-bool client::is_connected() const { return _connected; }
+int connection::raw_fd() const { return _stream.fd(); }
+bool connection::is_connected() const { return _connected; }
 
-void client::disconnect() {
+void connection::disconnect() {
     if (!is_connected()) return;
     std::cout << "client " << _id << " disconnected" << std::endl;
-    poll_register::instance().unregister_fd(_stream.fd());
+    poll_registry::instance().unregister_fd(_stream.fd());
     _connected = false;
     _stream.close();
 }
 
-void client::push_message(std::string s) { _messages->push_back(_id, s); }
-bool client::has_new_messages() const { return _msg_iter != _messages->cend(); }
+void connection::push_message(std::string s) { _messages->push_back(_id, s); }
+bool connection::has_new_messages() const { return _msg_iter != _messages->cend(); }
 
 // This function may only be called after a call to `has_new_messages` has
 // returned true.
-std::string_view client::pop_message() {
+std::string_view connection::pop_message() {
     return (_msg_iter++)->content;
 }

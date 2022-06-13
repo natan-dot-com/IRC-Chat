@@ -1,11 +1,11 @@
 #include <algorithm>
 
-#include "poll_register.hpp"
+#include "poll_registry.hpp"
 
-poll_register poll_register::global_instance;
-poll_register& poll_register::instance() { return global_instance; }
+poll_registry poll_registry::global_instance;
+poll_registry& poll_registry::instance() { return global_instance; }
 
-void poll_register::register_event(int fd, short events) {
+void poll_registry::register_event(int fd, short events) {
     auto it = std::find_if(_fds.begin(), _fds.end(),
                            [&](auto& pollfd){return pollfd.fd == fd;});
 
@@ -19,7 +19,7 @@ void poll_register::register_event(int fd, short events) {
     }
 }
 
-void poll_register::unregister_event(int fd, short events) {
+void poll_registry::unregister_event(int fd, short events) {
     auto it = std::find_if(_fds.begin(), _fds.end(),
                            [&](auto& pollfd){return pollfd.fd == fd;});
 
@@ -29,19 +29,19 @@ void poll_register::unregister_event(int fd, short events) {
     }
 }
 
-void poll_register::unregister_fd(int fd) {
+void poll_registry::unregister_fd(int fd) {
     auto it = std::find_if(_fds.begin(), _fds.end(),
                           [&](auto& pollfd){return pollfd.fd == fd;});
 
     if (it != _fds.end()) _fds.erase(it);
 }
 
-void poll_register::register_callback(int fd, callback_type cb) {
+void poll_registry::register_callback(int fd, callback_type cb) {
     if (fd >= _callbacks.size()) _callbacks.resize(fd + 1);
     _callbacks[fd] = std::move(cb);
 }
 
-int poll_register::poll(std::vector<event>& events) {
+int poll_registry::poll(std::vector<event>& events) {
     int n_events = ::poll(_fds.data(), _fds.size(), -1);
     if (n_events < 0) return n_events;
     events.reserve(n_events);
@@ -58,7 +58,7 @@ int poll_register::poll(std::vector<event>& events) {
     return n_events;
 }
 
-int poll_register::poll_and_dispatch() {
+int poll_registry::poll_and_dispatch() {
     std::vector<event> events;
     int res = poll(events);
     if (res < 0) return res;

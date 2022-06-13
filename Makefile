@@ -1,6 +1,6 @@
 BUILDDIR := build
 
-SERVER_DEPS  = $(BUILDDIR)/server/client.o $(BUILDDIR)/server/main.o
+SERVER_DEPS  = $(BUILDDIR)/server/connection.o $(BUILDDIR)/server/main.o
 SERVER_DEPS += $(BUILDDIR)/server/poll_register.o $(BUILDDIR)/server/server.o
 SERVER_DEPS += $(BUILDDIR)/server/tcpstream.o $(BUILDDIR)/server/message_queue.o
 

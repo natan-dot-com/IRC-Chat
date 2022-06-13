@@ -6,7 +6,7 @@
 
 #include <poll.h>
 
-class poll_register {
+class poll_registry {
 public:
     using callback_type = std::function<void(short)>;
 
@@ -16,10 +16,10 @@ public:
         callback_type callback;
     };
 
-    static poll_register& instance();
+    static poll_registry& instance();
 
-    poll_register() = default;
-    ~poll_register() = default;
+    poll_registry() = default;
+    ~poll_registry() = default;
 
     void register_event(int fd, short events);
     void unregister_event(int fd, short events);
@@ -32,7 +32,7 @@ private:
     std::vector<struct pollfd> _fds;
     std::vector<callback_type> _callbacks;
 
-    static poll_register global_instance;
+    static poll_registry global_instance;
 };
 
 #endif
