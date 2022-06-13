@@ -4,16 +4,18 @@
 #include <netinet/in.h>
 
 #include "tcpstream.hpp"
-#include "server.hpp"
+#include "tcplistener.hpp"
 #include "utils.hpp"
 
 
-server::server(uint16_t port)
+tcplistener::tcplistener(uint16_t port)
     : _port(port)
     , _init(false)
-{ }
+{
+    start();
+}
 
-server::server(server&& rhs)
+tcplistener::tcplistener(tcplistener&& rhs)
     : _port(rhs._port)
     , _init(rhs._init)
     , _fd(rhs._init)
@@ -22,14 +24,14 @@ server::server(server&& rhs)
     rhs._init = false;
 }
 
-server::~server() {
+tcplistener::~tcplistener() {
     if (_init) {
         shutdown(_fd, SHUT_RDWR);
         close(_fd);
     }
 }
 
-void server::start() {
+void tcplistener::start() {
     _fd = socket(AF_INET, SOCK_STREAM, 0);
     if (_fd == 0) THROW_ERRNO("socket failed");
 
@@ -50,7 +52,7 @@ void server::start() {
     _init = true;
 }
 
-tcpstream server::accept() {
+tcpstream tcplistener::accept() {
     if (!_init) THROW_ERRNO("server not initialized");
     size_t addrlen = sizeof(_address);
     int fd = ::accept(_fd, (struct sockaddr*)&_address, (socklen_t*)&addrlen);
@@ -58,4 +60,4 @@ tcpstream server::accept() {
     return tcpstream(fd);
 }
 
-int server::fd() const { return _fd; }
+int tcplistener::fd() const { return _fd; }

@@ -31,7 +31,7 @@ public:
 private:
     tcpstream(int fd) : _fd(fd) {}
 
-    friend class server;
+    friend class tcplistener;
 
     int _fd;
 };

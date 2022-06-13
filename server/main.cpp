@@ -14,8 +14,8 @@
 
 #include "tcpstream.hpp"
 #include "message_queue.hpp"
-#include "poll_register.hpp"
-#include "server.hpp"
+#include "poll_registry.hpp"
+#include "tcplistener.hpp"
 #include "connection.hpp"
 #include "utils.hpp"
 
@@ -133,7 +133,7 @@ public:
 
 static db db;
 
-void poll_server(server& server, std::shared_ptr<irc::message_queue> messages, std::vector<irc::connection>& connections) {
+void poll_server(tcplistener& server, std::shared_ptr<irc::message_queue> messages, std::vector<irc::connection>& connections) {
     size_t id = connections.size();
 
     std::cout << "client " << id << " connected" << std::endl;
@@ -186,8 +186,8 @@ int main() {
     static volatile std::sig_atomic_t quit = false;
     std::signal(SIGINT, [](int){ quit = true; });
 
-    server server(PORT);
-    server.start();
+    tcplistener listener(PORT);
+    listener.start();
     std::cout << "Listening localhost, port " << PORT << std::endl;
 
     auto messages = std::make_shared<irc::message_queue>();

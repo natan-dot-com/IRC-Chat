@@ -7,19 +7,20 @@
 
 #include "tcpstream.hpp"
 
-class server {
+class tcplistener {
 public:
-    server(uint16_t port);
-    server(const server&) = delete;
-    server(server&& rhs);
-    ~server();
+    tcplistener(uint16_t port);
+    tcplistener(const tcplistener&) = delete;
+    tcplistener(tcplistener&& rhs);
+    ~tcplistener();
 
-    void start();
     tcpstream accept();
 
     int fd() const;
 
 private:
+    void start();
+
     uint16_t _port;
     int _fd;
     struct sockaddr_in _address;
