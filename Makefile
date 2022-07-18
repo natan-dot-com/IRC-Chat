@@ -1,10 +1,7 @@
 BUILDDIR := build
 
-SERVER_DEPS  = $(BUILDDIR)/server/connection.o $(BUILDDIR)/server/main.o
-SERVER_DEPS += $(BUILDDIR)/server/poll_register.o $(BUILDDIR)/server/server.o
-SERVER_DEPS += $(BUILDDIR)/server/tcpstream.o $(BUILDDIR)/server/message_queue.o
-
-CLIENT_DEPS  = $(BUILDDIR)/client/client.o $(BUILDDIR)/client/main.o $(BUILDDIR)/client/utils.o
+SERVER_DEPS := $(patsubst ./server/%.cpp,$(BUILDDIR)/server/%.o,$(wildcard ./server/*.cpp))
+CLIENT_DEPS := $(BUILDDIR)/client/client.o $(BUILDDIR)/client/main.o $(BUILDDIR)/client/utils.o
 
 CFLAGS = -g -std=c++17
 

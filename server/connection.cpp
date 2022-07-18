@@ -1,66 +1,31 @@
-#include <iomanip>
 #include <iostream>
+#include <iomanip>
 
 #include "tcpstream.hpp"
 #include "connection.hpp"
 #include "utils.hpp"
-#include "poll_register.hpp"
+#include "poll_registry.hpp"
 
 using namespace irc;
 
-void connection::register_callback() {
-    // WARNING: This closure carries a reference to `this` which may not live as
-    // long as the static reference `poll_register::instance()`. Meaning if
-    // `this` is moved, we MUST also update the closure with a new reference to
-    // the new location of `this`.
-    poll_registry::instance()
-        .register_callback(raw_fd(), [&](short events) { this->poll(events); });
-}
-
-connection::connection(tcpstream stream, size_t id, std::shared_ptr<message_queue> messages)
+connection::connection(tcpstream stream, size_t id, message_handler_type on_msg)
     : _stream(std::move(stream))
-    , _messages(messages)
     , _id(id)
-    , _msg_iter(_messages->cbegin())
+    , _on_msg(on_msg)
 {
-    register_for_poll(POLLIN);
-    register_callback();
-}
-
-connection::connection(connection&& rhs)
-    : _stream(std::move(rhs._stream))
-    , _messages(rhs._messages)
-    , _id(rhs._id)
-    , _msg_iter(rhs._msg_iter)
-{
-    // We have just moved, the reference stored in the callback closure is no
-    // longer valid, update it.
-    register_callback();
-}
-
-connection& connection::operator=(connection&& rhs) {
-    _recv_buf = std::move(rhs._recv_buf);
-    _recv_idx = rhs._recv_idx;
-    _send_buf = std::move(rhs._send_buf);
-    _connected = rhs._connected;
-    _id = rhs._id;
-    _stream = std::move(rhs._stream);
-    _messages = std::move(rhs._messages);
-    _msg_iter = rhs._msg_iter;
-
-    // Move assignment is a move, register the callback once more!
-    register_callback();
-    return *this;
+    _recv_tok = poll_registry::instance()
+        .register_event(raw_fd(), POLLIN,
+                        [&](short) { this->poll_recv(); });
 }
 
 connection::~connection() {
-    if (is_connected()) {
-        poll_registry::instance().unregister_fd(_stream.fd());
-    }
+    // If we are already unregistered, that's fine, it will just do nothing.
+    if (is_connected()) disconnect();
 }
 
 void connection::poll_recv() {
-    ssize_t n_recv = _stream.nonblocking_recv(_recv_buf.data() + _recv_idx, _recv_buf.size() - _recv_idx);
+    ssize_t n_recv = _stream.nonblocking_recv(_recv_buf.data() + _recv_idx,
+                                              _recv_buf.size() - _recv_idx);
     if (n_recv == 0) {
         disconnect();
         return;
@@ -71,12 +36,10 @@ void connection::poll_recv() {
         THROW_ERRNO("failed to recv");
     }
 
-    if (n_recv > 0) {
-        _recv_idx += n_recv;
+    _recv_idx += n_recv;
 
-        // Keep the same size available for the buffer.
-        std::fill_n(std::back_inserter(_recv_buf), n_recv, 0);
-    }
+    // Keep the same size available for the buffer.
+    std::fill_n(std::back_inserter(_recv_buf), n_recv, 0);
 
     auto msg_end = std::find(_recv_buf.begin(), _recv_buf.begin() + _recv_idx, '\n');
     // If we haven't found the end of the message yet, continue.
@@ -85,9 +48,9 @@ void connection::poll_recv() {
     // End of the message was found! Write the message.
     std::string s;
     std::copy(_recv_buf.begin(), msg_end + 1, std::back_inserter(s));
-    push_message(std::move(s));
+    _on_msg(std::move(s));
 
-    // Update the buffer to put the start of the subsequent message in the start
+    // Update the buffer to put the start of the subsequent message in the start of the buffer.
     //
     //                 current message              _recv_idx
     //                 vvvvvvvvvvvvvv                   v
@@ -115,12 +78,14 @@ void connection::poll_send() {
     while (1) {
         // If we have nothing to send, check if there is any new message in the channel.
         if (_send_buf.empty()) {
-            if (!has_new_messages()) {
+            if (_send_queue.empty()) {
                 // Nothing else to send, unregister the event.
-                unregister_for_poll(POLLOUT);
+                poll_registry::instance().unregister_event(*_send_tok);
+                _send_tok = std::nullopt;
                 return;
             }
-            _send_buf = pop_message();
+            // `_send_buf` will hold a reference to the front of the queue.
+            _send_buf = _send_queue.front();
         }
         ssize_t n_sent = _stream.nonblocking_send((const uint8_t*)_send_buf.data(), _send_buf.size());
 
@@ -133,48 +98,41 @@ void connection::poll_send() {
             disconnect();
             return;
         }
-        if (n_sent > 0) _send_buf = _send_buf.substr(n_sent);
 
-        // There is more stuff to be sent, but we can't do it now since it might
-        // block. Continue the work next time we poll.
+        _send_buf = _send_buf.substr(n_sent);
+
+        // There is more stuff to be sent, but we can't do it now since it might block. Continue
+        // the work next time we poll.
         if (!_send_buf.empty()) return;
 
-        // If the message was already sent, move on to the next message,
-        // since nothing was blocking.
+        // We have just finished sending a message that was beeing referenced by `_send_buf`. Now
+        // we can pop it.
+        _send_queue.pop_front();
+
+        // If the message was already sent, move on to the next message, since nothing was
+        // blocking.
     }
 }
 
-void connection::poll(short events) {
-    // There are new messages inthe queue, we want to start sending them to the client.
-    if (has_new_messages()) register_for_poll(POLLOUT);
-    if (events & POLLIN ) poll_recv();
-    if (events & POLLOUT) poll_send();
+void connection::send_message(std::string s) {
+    _send_queue.emplace_back(std::move(s));
+    if (!_send_tok) {
+        _send_tok = poll_registry::instance()
+            .register_event(raw_fd(), POLLOUT, [&](short){ this->poll_send(); });
+    }
 }
 
-void connection::register_for_poll(short events) {
-    poll_registry::instance().register_event(raw_fd(), events);
-}
-
-void connection::unregister_for_poll(short events) {
-    poll_registry::instance().unregister_event(raw_fd(), events);
-}
+void connection::send_message(irc::message msg) { send_message(msg.to_string()); }
 
 int connection::raw_fd() const { return _stream.fd(); }
 bool connection::is_connected() const { return _connected; }
+size_t connection::id() const { return _id; }
 
 void connection::disconnect() {
     if (!is_connected()) return;
     std::cout << "client " << _id << " disconnected" << std::endl;
-    poll_registry::instance().unregister_fd(_stream.fd());
+    if (_recv_tok) poll_registry::instance().unregister_event(*_recv_tok);
+    if (_send_tok) poll_registry::instance().unregister_event(*_send_tok);
     _connected = false;
     _stream.close();
-}
-
-void connection::push_message(std::string s) { _messages->push_back(_id, s); }
-bool connection::has_new_messages() const { return _msg_iter != _messages->cend(); }
-
-// This function may only be called after a call to `has_new_messages` has
-// returned true.
-std::string_view connection::pop_message() {
-    return (_msg_iter++)->content;
 }

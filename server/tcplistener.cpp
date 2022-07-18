@@ -12,7 +12,6 @@ tcplistener::tcplistener(uint16_t port)
     : _port(port)
     , _init(false)
 {
-    start();
 }
 
 tcplistener::tcplistener(tcplistener&& rhs)
@@ -53,11 +52,18 @@ void tcplistener::start() {
 }
 
 tcpstream tcplistener::accept() {
-    if (!_init) THROW_ERRNO("server not initialized");
+    assert_init();
     size_t addrlen = sizeof(_address);
     int fd = ::accept(_fd, (struct sockaddr*)&_address, (socklen_t*)&addrlen);
     if (fd < 0) THROW_ERRNO("accept failed");
     return tcpstream(fd);
 }
 
-int tcplistener::fd() const { return _fd; }
+int tcplistener::fd() const {
+    assert_init();
+    return _fd;
+}
+
+void tcplistener::assert_init() const {
+    if (!_init) throw std::runtime_error("server not initialized");
+}

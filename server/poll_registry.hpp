@@ -2,6 +2,7 @@
 #define _POLL_REGISTER_H
 
 #include <vector>
+#include <utility>
 #include <functional>
 
 #include <poll.h>
@@ -9,28 +10,26 @@
 class poll_registry {
 public:
     using callback_type = std::function<void(short)>;
-
-    struct event {
-        int fd;
-        short events;
-        callback_type callback;
-    };
+    using token_type = size_t;
 
     static poll_registry& instance();
 
     poll_registry() = default;
     ~poll_registry() = default;
 
-    void register_event(int fd, short events);
-    void unregister_event(int fd, short events);
-    void unregister_fd(int fd);
-    void register_callback(int fd, callback_type cb);
-    int poll(std::vector<event>& events);
+    // Register to wait for `events` in file descriptor `fd` that, when notified, should call `cb`.
+    // This function returns a token which can be used to unregister this listener. This is
+    // necessary because it is possible to register multiple listeners for the same file
+    // descriptor.
+    token_type register_event(int fd, short events, callback_type cb);
+    bool unregister_event(token_type tok);
+    int poll(std::vector<token_type>& events);
     int poll_and_dispatch();
 
 private:
+    token_type _next_tok = 0;
     std::vector<struct pollfd> _fds;
-    std::vector<callback_type> _callbacks;
+    std::vector<std::pair<callback_type, token_type>> _callbacks_and_toks;
 
     static poll_registry global_instance;
 };

@@ -13,11 +13,20 @@
 // // Will produce an error similar to this (if errno is the error of "Invalid file descriptor")
 // // `error here (Invalid file descriptor) at src/file.cpp:123
 // ```
-#define THROW_ERRNO(msg) \
-    do { \
-        std::ostringstream ss; \
+#define THROW_ERRNO(msg)                                                                                   \
+    do {                                                                                                   \
+        std::ostringstream ss;                                                                             \
         ss << msg << " (" << strerror(errno) << ")" << " at " << __FILE__ << ":" << __LINE__ << std::endl; \
-        throw std::runtime_error(ss.str()); \
+        throw std::runtime_error(ss.str());                                                                \
     } while (0)
+
+#define STRINGIFY(thing) #thing
+#define TOSTRING(thing) STRINGIFY(thing)
+
+#define UNIMPLEMENTED()                                                                                    \
+        throw std::runtime_error("reached uninplemented at " __FILE__ ":" TOSTRING(__LINE__));
+
+#define UNREACHABLE()                                                                                      \
+        throw std::runtime_error("reached the unreachable at " __FILE__ ":" TOSTRING(__LINE__));
 
 #endif

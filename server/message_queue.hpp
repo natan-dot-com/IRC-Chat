@@ -6,36 +6,53 @@
 #include <functional>
 #include <optional>
 #include <vector>
+#include <variant>
+#include <iostream>
+
+#include "utils.hpp"
 
 namespace irc {
+    enum numeric_reply {
+        RPL_WHOISUSER = 311,
+        RPL_CHANNELMODEIS = 324,
+        ERR_NOSUCHNICK = 401,
+        ERR_CANNOTSENDTOCHAN = 404,
+    };
+
     enum class command {
-        user,
         pass,
+        nick,
+        user,
         privmsg,
         notice,
         join,
         whois,
+        mode,
+        quit,
 
         // Diverges from RFC
         ping,
         pong,
-
-        // Not present in RFC
-        mute,
-        unmute,
     };
+
+    std::ostream& operator<<(std::ostream& os, enum command cmd);
 
     struct message {
+        static message parse(std::string_view s);
+
         std::optional<std::string> prefix;
-        enum command command;
+        std::variant<enum command, numeric_reply> command;
         std::vector<std::string> params;
 
-        message(std::optional<std::string> prefix, enum command command,
-                std::vector<std::string> params);
+        message(std::optional<std::string> prefix, std::variant<enum command, numeric_reply> command,
+                std::vector<std::string> params = std::vector<std::string>());
 
-        message(enum command command, std::vector<std::string> params);
+        message(std::variant<enum command, numeric_reply> command, std::vector<std::string> params = std::vector<std::string>());
+
+        std::string to_string() const;
     };
 
+    /*
     // A queue of messages sent by clients. This queue is append only and all
     // message references never get invalidated. This means a client may hold a
     // reference to any message for as long as it wants without risk of the
@@ -85,14 +102,13 @@ namespace irc {
         size_t size() const;
         const_iterator cbegin() const;
         const_iterator cend() const;
-        int fd() const;
 
     private:
         queue_type _messages;
-        int _ev_fd;
 
         friend class const_iterator;
     };
+    */
 }
 
 #endif

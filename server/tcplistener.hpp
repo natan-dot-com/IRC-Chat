@@ -17,9 +17,10 @@ public:
     tcpstream accept();
 
     int fd() const;
+    void start();
 
 private:
-    void start();
+    void assert_init() const;
 
     uint16_t _port;
     int _fd;
