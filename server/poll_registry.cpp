@@ -1,3 +1,4 @@
+#include <iostream>
 #include <algorithm>
 
 #include "poll_registry.hpp"
@@ -40,6 +41,7 @@ int poll_registry::poll(std::vector<token_type>& events) {
 int poll_registry::poll_and_dispatch() {
     int n_events = ::poll(_fds.data(), _fds.size(), -1);
     if (n_events < 0) return n_events;
+    std::cout << "NOTIFIED" << std::endl;
 
     for (size_t i = 0; i < _fds.size(); i++) {
         auto& pollfd = _fds[i];

@@ -1,5 +1,6 @@
 #include <iostream>
 #include <iomanip>
+#include <algorithm>
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -7,8 +8,10 @@
 
 #include "tcpstream.hpp"
 #include "connection.hpp"
-#include "utils.hpp"
+#include "../common/utils.hpp"
 #include "poll_registry.hpp"
+
+#define MSG_SIZE_LIMIT 4096
 
 using namespace irc;
 
@@ -43,9 +46,11 @@ void connection::poll_recv() {
     _recv_idx += n_recv;
 
     // Keep the same size available for the buffer.
-    std::fill_n(std::back_inserter(_recv_buf), n_recv, 0);
+    _recv_buf.resize(_recv_idx + buf_size, 0);
 
-    auto msg_end = std::find(_recv_buf.begin(), _recv_buf.begin() + _recv_idx, '\n');
+    auto msg_end = std::find(_recv_buf.begin() + _recv_idx - n_recv,
+                             _recv_buf.begin() + _recv_idx, '\n');
+
     // If we haven't found the end of the message yet, continue.
     if (msg_end == _recv_buf.begin() + _recv_idx) return;
 
@@ -74,6 +79,7 @@ void connection::poll_recv() {
     //
     auto new_first = std::rotate(_recv_buf.begin(), msg_end + 1, _recv_buf.begin() + _recv_idx);
     _recv_idx = std::distance(_recv_buf.begin(), new_first);
+    _recv_buf.resize(_recv_idx + buf_size, 0);
 
     return;
 }
@@ -119,7 +125,12 @@ void connection::poll_send() {
 }
 
 void connection::send_message(std::string s) {
-    _send_queue.emplace_back(std::move(s));
+    // Split the message into smaller chunks
+    std::string_view slice = s;
+    do {
+        _send_queue.emplace_back(slice.substr(0, MSG_SIZE_LIMIT));
+        slice = slice.substr(std::min((size_t)MSG_SIZE_LIMIT, slice.size()));
+    } while (slice.size() > 0);
     if (!_send_tok) {
         _send_tok = poll_registry::instance()
             .register_event(raw_fd(), POLLOUT, [&](short){ this->poll_send(); });

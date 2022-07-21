@@ -8,10 +8,15 @@
 #include <vector>
 
 #include "tcpstream.hpp"
-#include "message.hpp"
+#include "../common/message.hpp"
 #include "poll_registry.hpp"
 
 namespace irc {
+
+    static const constexpr int buf_size = 4096;
+
+    typedef size_t connection_id_t;
+
     // The connection class represents a client connected to the server. It is responsible for
     // receiving messages from the associated tcpstream and sending messages through it when they
     // become available in the message queue.
@@ -58,9 +63,9 @@ namespace irc {
         // Data needed for receiving from the client.
         std::optional<poll_registry::token_type> _recv_tok;
 
-        // Buffer for receiving data. This buffer will always have `BUFSIZ` free of any data. This
+        // Buffer for receiving data. This buffer will always have `buf_size` free of any data. This
         // way the `recv` operation can always receive the same ammount of data at once.
-        std::vector<uint8_t> _recv_buf = std::vector<uint8_t>(BUFSIZ, 0);
+        std::vector<uint8_t> _recv_buf = std::vector<uint8_t>(buf_size, 0);
 
         // The index of the next byte to receive into `_recv_buf`.
         size_t _recv_idx = 0;
