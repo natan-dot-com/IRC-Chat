@@ -1,9 +1,16 @@
 BUILDDIR := build
 
-SERVER_DEPS := $(patsubst ./server/%.cpp,$(BUILDDIR)/server/%.o,$(wildcard ./server/*.cpp))
-CLIENT_DEPS := $(BUILDDIR)/client/client.o $(BUILDDIR)/client/main.o $(BUILDDIR)/client/utils.o
+COMMON_SRCS := common/message.cpp tcp/tcplistener.cpp tcp/tcpstream.cpp
+SERVER_SRCS := server/channel.cpp server/connection.cpp server/db.cpp server/main.cpp server/poll_registry.cpp
+CLIENT_SRCS := client/client.cpp client/main.cpp
 
-CFLAGS = -fsanitize=address -g -std=c++17
+SERVER_DEPS := $(patsubst %.cpp,$(BUILDDIR)/%.o,$(SERVER_SRCS) $(COMMON_SRCS))
+CLIENT_DEPS := $(patsubst %.cpp,$(BUILDDIR)/%.o,$(CLIENT_SRCS) $(COMMON_SRCS))
+
+INCLUDE_PATHS := common tcp
+INCLUDE_FLAGS := $(patsubst %,-I%,$(INCLUDE_PATHS))
+
+CPPFLAGS = -fsanitize=address -g -std=c++17 $(INCLUDE_FLAGS)
 
 all: server client
 
@@ -19,26 +26,27 @@ client: $(BUILDDIR)/client/main
 
 .PHONY: run server client run_client run_server
 
-
+echo:
+	@echo $(CLIENT_DEPS)
 
 $(BUILDDIR)/server/main: $(SERVER_DEPS)  | $(BUILDDIR)
-	g++ $(CFLAGS) $^ -o $@ -lpthread
+	@printf "LINK\t$@\n"
+	@g++ $(CPPFLAGS) $^ -o $@
 
 $(BUILDDIR)/client/main: $(CLIENT_DEPS) | $(BUILDDIR)
-	g++ $(CFLAGS) $^ -o $@ -lpthread -lncurses
+	@printf "LINK\t$@\n"
+	@g++ $(CPPFLAGS) $^ -o $@ -lpthread -lncurses
 
-$(BUILDDIR)/client/%.o: client/%.cpp client/*.hpp | $(BUILDDIR)
-	g++ -c $(CFLAGS) $< -o $@
-
-$(BUILDDIR)/server/%.o: server/%.cpp server/*.hpp | $(BUILDDIR)
-	g++ -c $(CFLAGS) $< -o $@
-
-
+$(BUILDDIR)/%.o: %.cpp | $(BUILDDIR)
+	@printf "COMPILE\t$@\n"
+	@g++ -c $(CPPFLAGS) $< -o $@
 
 $(BUILDDIR):
 	mkdir -p $@
 	mkdir -p $@/client
 	mkdir -p $@/server
+	mkdir -p $@/common
+	mkdir -p $@/tcp
 
 clean:
 	rm -rf $(BUILDDIR)

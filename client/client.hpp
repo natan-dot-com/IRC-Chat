@@ -5,15 +5,17 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 
-class Client {
-    public:
-        short id;
+class client {
+public:
 
-        Client();
+    client();
 
-        int s_connect(int serverPort);
-        int s_send(std::string msg);
-        int s_recv(std::string *rsp);
+    int connect(int serverPort);
+    int send(std::string msg);
+    int recv(std::string& rsp);
+
+private:
+    int _fd;
 };
 
 #endif
