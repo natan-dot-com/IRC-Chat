@@ -16,7 +16,13 @@ namespace irc {
         RPL_WHOISUSER = 311,
         RPL_CHANNELMODEIS = 324,
         ERR_NOSUCHNICK = 401,
+        ERR_NOSUCHCHANNEL = 403,
         ERR_CANNOTSENDTOCHAN = 404,
+        ERR_ERRONEUSNICKNAME = 432,
+        ERR_NICKNAMEINUSE = 433,
+        ERR_NOTONCHANNEL = 442,
+        ERR_NEEDMOREPARAMS = 461,
+        ERR_CHANOPRIVSNEEDED = 482,
     };
 
     enum class command {
@@ -29,15 +35,27 @@ namespace irc {
         whois,
         mode,
         quit,
+        kick,
 
         // Diverges from RFC
         ping,
         pong,
     };
 
+
+
     std::ostream& operator<<(std::ostream& os, enum command cmd);
 
     struct message {
+        class parse_error : public std::exception {
+        public:
+            parse_error(const char* msg) : _msg(msg) { }
+            const char* what() { return _msg; }
+
+        private:
+            const char* _msg;
+        };
+
         static message parse(std::string_view s);
 
         std::optional<std::string> prefix;
@@ -48,8 +66,44 @@ namespace irc {
                 std::vector<std::string> params = std::vector<std::string>());
 
         message(std::variant<enum command, numeric_reply> command, std::vector<std::string> params = std::vector<std::string>());
+        message() = default;
 
         std::string to_string() const;
+
+
+        static inline message no_such_nick() {
+            return message(ERR_NOSUCHNICK, { "No such nick/channel" });
+        }
+
+        static inline message no_such_channel() {
+            return message(ERR_NOSUCHCHANNEL, { "No such channel" });
+        }
+
+        static inline message cannot_send_to_chan() {
+            return message(ERR_CANNOTSENDTOCHAN, { "Cannot send to channel" });
+        }
+
+        static inline message erroneus_nickname() {
+            return message(ERR_ERRONEUSNICKNAME, { "Erroneus nickname" });
+        }
+
+        static inline message nickname_in_use() {
+            return message(ERR_NICKNAMEINUSE, { "Nickname is already in use" });
+        }
+
+        static inline message not_on_channel() {
+            return message(ERR_NOTONCHANNEL, { "You're not on that channel" });
+        }
+
+        static inline message need_more_params(enum command cmd) {
+            std::stringstream ss;
+            ss << cmd;
+            return message(ERR_NEEDMOREPARAMS, { ss.str(), "Not enough parameters" });
+        }
+
+        static inline message chann_op_priv_needed() {
+            return message(ERR_CHANOPRIVSNEEDED, { "You're not channel operator" });
+        }
     };
 
     /*

@@ -5,7 +5,7 @@
 #include <sys/eventfd.h>
 #include <unistd.h>
 
-#include "message_queue.hpp"
+#include "message.hpp"
 #include "utils.hpp"
 
 
@@ -24,6 +24,7 @@ namespace irc {
             case irc::command::ping:    os << "PING";    break;
             case irc::command::pong:    os << "PONG";    break;
             case irc::command::quit:    os << "QUIT";    break;
+            case irc::command::kick:    os << "KICK";    break;
         }
         return os;
     }
@@ -34,7 +35,7 @@ namespace irc {
         std::optional<std::string> prefix;
         if (s.at(0) == ':') {
             auto space_idx = s.find(" ");
-            if (space_idx == std::string_view::npos) throw std::runtime_error("expected space");
+            if (space_idx == std::string_view::npos) throw parse_error("expected space");
             prefix = s.substr(1, space_idx - 1);
             s = s.substr(space_idx + 1);
         }
@@ -56,7 +57,8 @@ namespace irc {
         else if (cmd_name == "PONG"    ) command = irc::command::pong;
         else if (cmd_name == "MODE"    ) command = irc::command::mode;
         else if (cmd_name == "QUIT"    ) command = irc::command::quit;
-        else throw std::runtime_error("unsupported command");
+        else if (cmd_name == "KICK"    ) command = irc::command::kick;
+        else throw parse_error("unsupported command");
 
         std::vector<std::string> params;
         while (!s.empty() && s.at(0) != '\n') {
@@ -66,7 +68,9 @@ namespace irc {
             }
 
             auto space_idx = s.find(" ");
-            if (space_idx == std::string_view::npos) space_idx = s.size() - 1;
+            if (space_idx == std::string_view::npos)
+                throw parse_error("expected a ':' before the trailing");
+
             params.emplace_back(s.substr(0, space_idx));
             s = s.substr(space_idx + 1);
         }
@@ -90,8 +94,11 @@ namespace irc {
         std::ostringstream ss;
         if (prefix) ss << ":" << *prefix << " ";
         std::visit([&](auto&& cmd) { ss << cmd << " "; }, command);
-        std::copy(params.cbegin(), params.cend() - 1, std::ostream_iterator<std::string>(ss, " "));
-        ss << ":" << params.back() << std::endl;
+        if (params.size() > 0) {
+            std::copy(params.cbegin(), params.cend() - 1, std::ostream_iterator<std::string>(ss, " "));
+            ss << ":" << params.back();
+        }
+        ss << std::endl;
         return ss.str();
     }
 

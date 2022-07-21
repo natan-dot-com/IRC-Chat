@@ -17,7 +17,7 @@
 #include <poll.h>
 
 #include "tcpstream.hpp"
-#include "message_queue.hpp"
+#include "message.hpp"
 #include "poll_registry.hpp"
 #include "tcplistener.hpp"
 #include "connection.hpp"
@@ -109,6 +109,21 @@ public:
         members.erase(last, members.end());
     }
 
+    // If there are no other operators in the channel, promotes a new user to operator. If a user
+    // is promoted, it's id is returned.
+    std::optional<connection_id_t> maybe_promote_operator() {
+        auto it = std::find_if(members.begin(), members.end(),
+                               [](auto& member){ return member.is_operator; });
+        if (it == members.end() && !members.empty()) {
+            auto& member = *members.begin();
+            member.is_operator = true;
+            return member.id;
+        }
+        return std::nullopt;
+    }
+
+    bool empty() const { return members.empty(); }
+
 private:
     channel(std::string_view name, connection_id_t id, std::weak_ptr<irc::connection> conn) : name(name) {
         members.emplace_back((member) {
@@ -128,27 +143,26 @@ private:
 };
 
 class db {
+public:
+    enum class conn_state {
+        init,
+        registered_nick,
+    };
+
     struct conn_info {
         // As per the RFC, a user could be in multiple channels, but here we only consider a single
         // channel.
         //
         // This `string_view` points into a key of the `_channels` member.
-        std::string_view joined_channel;
+        std::optional<std::string_view> joined_channel = std::nullopt;
+        std::optional<std::string> nick = std::nullopt;
+        conn_state state = conn_state::init;
         uint32_t ipv4;
-        std::string nick;
+        connection_id_t id;
 
-        conn_info() = default;
+        conn_info(connection_id_t id, uint32_t ipv4) : id(id), ipv4(ipv4) { }
     };
 
-    std::map<std::string, channel, std::less<>> _channels;
-    //                             ^^^^^^^^^^^~~~ needed since we want to compare strings against
-    //                                            string views, which are not the same type, but
-    //                                            compare the same.
-
-    // Information about each connection. The index is the connection id
-    std::vector<conn_info> _connections;
-
-public:
     void join_chan(std::weak_ptr<irc::connection> conn, std::string_view channel_name) {
         // When creating a channel, we use the string at the key of the map `_channels` as the only
         // allocation for the channel name. All other instances of the name of the channel are
@@ -170,8 +184,7 @@ public:
 
         auto chan_it = _channels.find(channel_name);
         if (chan_it == _channels.end()) {
-            auto nick = get_nick_by_id(id);
-            std::cout << "channel " << channel_name << " created with " << nick << " as moderator" << std::endl;
+            std::cout << "channel " << channel_name << " created with " << id << " as moderator" << std::endl;
             // Here we initialize the channel name as the empty string because we can't yet get a
             // reference to the key where the string will be allocated. This insertion should never
             // fail since we checked there is no other channel with the same key.
@@ -189,7 +202,6 @@ public:
 
         // Now `channel_name` points into the string in the key of the `_channels` map.
         info.joined_channel = channel_name;
-
     }
 
     bool quit_chan(connection_id_t id, std::string_view channel_name) {
@@ -197,40 +209,37 @@ public:
         if (!chan || !chan->remove_member(id)) return false;
 
         // Chennal is empty, remove it
-        if (chan->members.size() == 0) {
+        if (chan->empty()) {
             std::cout << "channel " << channel_name << " deleted since it had no members" << std::endl;
             _channels.erase(_channels.find(channel_name));
+        } else {
+            auto promoted = chan->maybe_promote_operator();
+            if (promoted) {
+                auto promoted_info = get_conn_info(*promoted);
+                std::cout << "promoting " << *promoted_info.nick << std::endl;
+                chan->send_message(irc::message(
+                    "system",
+                    irc::command::privmsg,
+                    { std::string(channel_name), *promoted_info.nick + " promoted to operator" }
+                ));
+            }
         }
         return true;
     }
 
-    void register_nick(connection_id_t id, std::string nick) {
+    void register_connection(connection_id_t id, uint32_t ipv4) {
+        _connections.insert(std::make_pair(id, conn_info(id, ipv4)));
+    }
+
+    conn_info& get_conn_info(connection_id_t id) {
+        return _connections.at(id);
+    }
+
+    conn_info* get_conn_info_by_nick(std::string_view nick) {
         auto it = std::find_if(_connections.begin(), _connections.end(),
-                               [&](auto& info) { return info.nick == nick; });
-        if (it == _connections.end()) {
-            if (id >= _connections.size()) _connections.resize(id + 1);
-            _connections.at(id).nick = std::move(nick);
-        } else {
-            it->nick = nick;
-        }
-    }
-
-    const std::string& get_nick_by_id(connection_id_t id) const {
-        return _connections.at(id).nick;
-    }
-
-    const std::optional<connection_id_t> get_id_by_nick(std::string_view nick) const {
-        auto it = std::find_if(_connections.cbegin(), _connections.cend(),
-                               [=](auto& info){ return info.nick == nick; });
-
-        if (it == _connections.cend()) return std::nullopt;
-        return std::distance(_connections.cbegin(), it);
-    }
-
-    // The returned `string_view` is only valid for the lifetime of the channel. If a longer
-    // lifetime is required, turn it into a `string`.
-    std::string_view get_current_chan(connection_id_t id) {
-        return _connections.at(id).joined_channel;
+                               [=](auto& conn) { return conn.second.nick == nick; });
+        if (it == _connections.end()) return nullptr;
+        return &it->second;
     }
 
     channel* get_channel(std::string_view name) {
@@ -239,9 +248,18 @@ public:
         return &it->second;
     }
 
-    uint32_t get_ipv4(connection_id_t id) const {
-        return _connections.at(id).ipv4;
+    void remove_connection(connection_id_t id) {
+        _connections.erase(id);
     }
+
+private:
+    std::map<std::string, channel, std::less<>> _channels;
+    //                             ^^^^^^^^^^^~~~ needed since we want to compare strings against
+    //                                            string views, which are not the same type, but
+    //                                            compare the same.
+
+    // Information about each connection. The index is the connection id
+    std::unordered_map<connection_id_t, conn_info> _connections;
 };
 
 class server {
@@ -265,7 +283,6 @@ public:
         static volatile std::sig_atomic_t quit = false;
         std::signal(SIGINT, [](int){ quit = true; });
 
-
         while (!quit) {
             // If the poll call failed because of an interrupt, skip this iteration
             // of the loop. Note that if the SIGINT signal was the cause, the `quit`
@@ -276,17 +293,25 @@ public:
                 THROW_ERRNO("poll failed");
             }
 
-            auto it = std::remove_if(_connections.begin(), _connections.end(),
-                                     [](auto& cli) { return !cli->is_connected(); });
+            std::vector<connection_id_t> to_remove;
 
             // All connections that are about to close, quit all of their channels.
-            for (auto i = it; i < _connections.end(); i++) {
-                auto chan_name = _db.get_current_chan((*i)->id());
-                _db.quit_chan((*i)->id(), chan_name);
-            }
+            for (auto i = _connections.begin(); i != _connections.end();) {
+                connection_id_t id = i->second->id();
+                if (!i->second->is_connected()) {
+                    auto info = _db.get_conn_info(id);
+                    if (info.joined_channel) {
+                        _db.quit_chan(id, *info.joined_channel);
+                    }
+                    _db.remove_connection(id);
 
-            // Delete disconnected clients.
-            _connections.erase(it, _connections.end());
+                    // We can't erase the element at the iterator's position and then increment the
+                    // interator. Therefore we must increment it **before** we erase the element.
+                    i++;
+                    _connections.erase(id);
+                }
+                i++;
+            }
         }
 
         // All `tcpstream` destructors will run, closing any open connections.
@@ -295,7 +320,7 @@ public:
     void poll_accept() {
         // TODO: This cannot be because then if a user exists and reenters, he could end up with the same
         // id as another one.
-        connection_id_t id = _connections.size();
+        connection_id_t id = _curr_id_count++;
 
         std::cout << "client " << id << " connected" << std::endl;
 
@@ -314,24 +339,53 @@ public:
                                             // cause a reference cycle.
                                             this->handle_message(ptr.lock(), std::move(s));
                                         });
-        _connections.emplace_back(std::move(ptr));
+        const auto&[it, ok] = _connections.emplace(std::make_pair(id, std::move(ptr)));
+        _db.register_connection(id, it->second->get_ipv4());
     }
 
     void handle_message(std::shared_ptr<irc::connection> conn, std::string s) {
         // Should never happen!
         if (!conn) std::terminate();
         auto id = conn->id();
+        auto& conn_info = _db.get_conn_info(id);
 
-        irc::message message = irc::message::parse(s);
+        irc::message message;
+        try {
+            message = irc::message::parse(s);
+        } catch (irc::message::parse_error err) {
+            std::cerr << "MESSAGE FORMAT ERROR: " << err.what() << std::endl;
+            return;
+        }
+
         irc::command cmd = std::get<0>(message.command);
 
+        // Not registered yet.
+        if (conn_info.state == db::conn_state::init && cmd != irc::command::nick) return;
 
         switch (cmd) {
             case irc::command::nick:
             {
+                if (message.params.size() < 1) {
+                    conn->send_message(irc::message::need_more_params(cmd));
+                    return;
+                }
+
                 auto& nick = message.params.at(0);
+                if (nick.size() > 50) {
+                    conn->send_message(irc::message::erroneus_nickname());
+                    return;
+                }
+
+                if (_db.get_conn_info_by_nick(nick)) {
+                    conn->send_message(irc::message::nickname_in_use());
+                    return;
+                }
+
                 std::cout << "client " << id << " registered as " << nick << std::endl;
-                _db.register_nick(id, nick);
+                conn_info.nick = nick;
+                if (conn_info.state == db::conn_state::init) {
+                    conn_info.state = db::conn_state::registered_nick;
+                }
                 return;
             }
 
@@ -340,35 +394,76 @@ public:
                 // Here we are diverging from the RFC. In the RFC, PING commands
                 // can only be sent by servers and answered by clients. Here we do
                 // it the other way around.
-                std::string nick = _db.get_nick_by_id(id);
                 conn->send_message(irc::message(irc::command::pong));
                 return;
             }
 
             case irc::command::join:
             {
-                std::cout << "client " << id << " joins channel " << message.params.at(0) << std::endl;
-                _db.join_chan(conn, message.params.at(0));
+                if (message.params.size() < 1) {
+                    conn->send_message(irc::message::need_more_params(cmd));
+                    return;
+                }
+
+                auto& chan_name = message.params.at(0);
+                if (chan_name.size() == 0
+                 || chan_name.size() > 200
+                 || (chan_name[0] != '#' && chan_name[0] != '&')
+                 || chan_name.find(',') != std::string::npos) {
+                    conn->send_message(irc::message::no_such_channel());
+                    return;
+                }
+
+                if (conn_info.joined_channel) _db.quit_chan(id, *conn_info.joined_channel);
+
+                _db.join_chan(conn, chan_name);
                 return;
             }
 
             case irc::command::mode:
             {
+                if (message.params.size() < 3) {
+                    conn->send_message(irc::message::need_more_params(cmd));
+                    return;
+                }
+
                 const auto& chan_name = message.params.at(0);
                 auto chan = _db.get_channel(chan_name);
 
                 if (!chan) {
-                    conn->send_message(irc::message(irc::ERR_NOSUCHNICK, { "No such nick/channel" }));
+                    conn->send_message(irc::message::no_such_channel());
+                    return;
+                }
+
+                auto member = chan->get_member(id);
+                if (!member) {
+                    conn->send_message(irc::message::not_on_channel());
+                    return;
+                }
+
+                if (!member->is_operator) {
+                    conn->send_message(irc::message::chann_op_priv_needed());
                     return;
                 }
 
                 const auto& modifiers = message.params.at(1);
-                const auto& nick = message.params.at(2);
-                auto target_id = _db.get_id_by_nick(nick);
-                if (!target_id) UNIMPLEMENTED();
+                auto target_id = _db.get_conn_info_by_nick(message.params.at(2));
+                if (!target_id) {
+                    conn->send_message(irc::message::no_such_nick());
+                    return;
+                }
 
-                if      (modifiers.find("+v") != std::string::npos) chan->mute(*target_id);
-                else if (modifiers.find("-v") != std::string::npos) chan->unmute(*target_id);
+                bool ok = true;
+                if      (modifiers.find("+v") != std::string::npos) ok = chan->mute(target_id->id);
+                else if (modifiers.find("-v") != std::string::npos) ok = chan->unmute(target_id->id);
+
+                if (!ok) {
+                    // TODO: Should probably be a better message. This happens when trying to alter
+                    // the permissions of a user that exists but is not on the channel. It's not
+                    // that the operator isn't on the channel.
+                    conn->send_message(irc::message::not_on_channel());
+                    return;
+                }
 
                 // TODO: implement more modifiers.
                 return;
@@ -376,10 +471,13 @@ public:
 
             case irc::command::whois:
             {
-                const auto& nick = message.params.at(0);
-                auto target_id = _db.get_id_by_nick(nick);
-                if (!target_id) UNIMPLEMENTED();
-                uint32_t ipv4 = _db.get_ipv4(*target_id);
+                auto target_id = _db.get_conn_info_by_nick(message.params.at(0));
+                if (!target_id) {
+                    conn->send_message(irc::message::no_such_nick());
+                    return;
+                }
+
+                uint32_t ipv4 = target_id->ipv4;
 
                 std::ostringstream ss;
                 ss << ((ipv4 >> 24) & 0xff) << "."
@@ -393,24 +491,33 @@ public:
 
             case irc::command::privmsg:
             {
+                if (message.params.size() < 2) {
+                    conn->send_message(irc::message::need_more_params(cmd));
+                    return;
+                }
 
                 std::string_view channel_name = message.params.at(0);
                 auto chan = _db.get_channel(channel_name);
                 if (!chan) {
-                    conn->send_message(irc::message(irc::ERR_NOSUCHNICK, { "No such nick/channel" }));
+                    conn->send_message(irc::message::no_such_channel());
                     return;
                 }
 
                 auto member = chan->get_member(id);
-                if (!member || member->is_muted) {
-                    conn->send_message(irc::message(irc::ERR_CANNOTSENDTOCHAN, { std::string(channel_name), "Cannot send to channel" }));
+                if (!member) {
+                    conn->send_message(irc::message::not_on_channel());
+                    return;
+                }
+
+                if (member->is_muted) {
+                    conn->send_message(irc::message::cannot_send_to_chan());
                     return;
                 }
 
                 std::cout << "client " << id << " sent message " << std::quoted(message.params.back())
                           << " on channel " << channel_name << std::endl;
 
-                auto nick = _db.get_nick_by_id(id);
+                auto nick = conn_info.nick.value();
                 message.prefix = nick;
                 chan->send_message(message);
                 return;
@@ -425,13 +532,56 @@ public:
                 return;
             }
 
+            case irc::command::kick:
+            {
+                if (message.params.size() < 2) {
+                    conn->send_message(irc::message::need_more_params(cmd));
+                    return;
+                }
+
+                std::string& chan_name = message.params.at(0);
+                auto chan = _db.get_channel(chan_name);
+                if (!chan) {
+                    conn->send_message(irc::message::not_on_channel());
+                    return;
+                }
+
+                auto member = chan->get_member(id);
+                if (!member) {
+                    conn->send_message(irc::message::not_on_channel());
+                    return;
+                }
+
+                if (!member->is_operator) {
+                    conn->send_message(irc::message::chann_op_priv_needed());
+                    return;
+                }
+
+                auto& kicked_nick = message.params.at(1);
+                auto kicked = _db.get_conn_info_by_nick(kicked_nick);
+                if (!kicked) {
+                    conn->send_message(irc::message::no_such_nick());
+                    return;
+                }
+
+                bool ok = _db.quit_chan(kicked->id, chan_name);
+                if (!ok) {
+                    conn->send_message(irc::message::not_on_channel());
+                    return;
+                }
+
+                std::cout << "client " << kicked_nick << " was kicked" << std::endl;
+                return;
+            }
+
             default: UNIMPLEMENTED();
         }
     }
 
 private:
     db _db;
-    std::vector<std::shared_ptr<irc::connection>> _connections;
+    connection_id_t _curr_id_count = 0;
+    std::map<connection_id_t, std::shared_ptr<irc::connection>> _connections;
     tcplistener _listener;
     poll_registry::token_type _listener_tok;
 };

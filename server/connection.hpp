@@ -8,7 +8,7 @@
 #include <vector>
 
 #include "tcpstream.hpp"
-#include "message_queue.hpp"
+#include "message.hpp"
 #include "poll_registry.hpp"
 
 namespace irc {
@@ -39,6 +39,8 @@ namespace irc {
 
         // Disconnects the client from the server. This will close the connection.
         void disconnect();
+
+        uint32_t get_ipv4() const;
 
     private:
         // Should only be called when data can be received through `_stream`. `poll_recv` will

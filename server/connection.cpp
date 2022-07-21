@@ -1,6 +1,10 @@
 #include <iostream>
 #include <iomanip>
 
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+
 #include "tcpstream.hpp"
 #include "connection.hpp"
 #include "utils.hpp"
@@ -135,4 +139,13 @@ void connection::disconnect() {
     if (_send_tok) poll_registry::instance().unregister_event(*_send_tok);
     _connected = false;
     _stream.close();
+}
+
+uint32_t connection::get_ipv4() const {
+    struct sockaddr_in address;
+    size_t addrlen = sizeof(address);
+    int ret = getpeername(_stream.fd(), (struct sockaddr*)&address, (socklen_t*)&addrlen);
+    if (ret < 0) THROW_ERRNO("getpeername failed");
+    // TODO: Check if this is in host or network byte order.
+    return htonl(address.sin_addr.s_addr);
 }
