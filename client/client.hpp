@@ -14,7 +14,7 @@ public:
     client();
     ~client();
 
-    int connect(int server_port);
+    int connect(const char *server, int server_port);
     int send(std::string msg);
     int recv(std::string& rsp);
 

@@ -1,6 +1,7 @@
 #include <array>
 
 #include <unistd.h>
+#include <netdb.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 
@@ -16,10 +17,10 @@ client::~client() {
     ::close(_fd);
 }
 
-int client::connect(int server_port) {
+int client::connect(const char *server, int server_port) {
     struct sockaddr_in remote = {0};
 
-    remote.sin_addr.s_addr = inet_addr(LOCAL_HOST);
+    remote.sin_addr.s_addr = inet_addr(server);
     remote.sin_family = AF_INET;
     remote.sin_port = htons(server_port);
 

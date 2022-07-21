@@ -154,13 +154,13 @@ void recv_message(WINDOW* w, client& cli) {
 }
 
 int main(int argc, char *argv[]) {
-    if (argc == 1) {
-        std::cout << "Please enter a valid port number" << std::endl;
+    if (argc == 2) {
+        std::cout << "Please enter a valid server and port number" << std::endl;
         return EXIT_FAILURE;
     }
 
     client cli;
-    if (cli.connect(atoi(argv[1]))) {
+    if (cli.connect(argv[1], atoi(argv[2]))) {
         std::cout << "Connection can't be reached" << std::endl;
         return EXIT_FAILURE;
     }
