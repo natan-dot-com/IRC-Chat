@@ -17,7 +17,7 @@ namespace irc {
     // become available in the message queue.
     class connection {
     public:
-        using message_handler_type = std::function<void(std::string)>;
+        using message_handler_type = std::function<void(connection*, std::string)>;
 
         connection(tcpstream stream, size_t id, message_handler_type on_msg);
 

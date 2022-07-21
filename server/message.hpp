@@ -22,24 +22,47 @@ namespace irc {
         ERR_NICKNAMEINUSE = 433,
         ERR_NOTONCHANNEL = 442,
         ERR_NEEDMOREPARAMS = 461,
+        ERR_ALREADYREGISTERED = 462,
         ERR_CHANOPRIVSNEEDED = 482,
     };
 
     enum class command {
-        pass,
-        nick,
-        user,
-        privmsg,
-        notice,
-        join,
-        whois,
-        mode,
-        quit,
-        kick,
+    //  COMMAND      IRC RFC Section
+    //  =======      ===============
+        // pass,     // 4.1.1
+        nick,        // 4.1.2
+        user,        // 4.1.3
+        // server,   // 4.1.4
+        // oper,     // 4.1.5
+        quit,        // 4.1.6
+        // squit,    // 4.1.7
+        join,        // 4.2.1
+        // part,     // 4.2.2
+        mode,        // 4.2.3
+        // topic,    // 4.2.4
+        // names,    // 4.2.5
+        // list,     // 4.2.6
+        // invite,   // 4.2.7
+        kick,        // 4.2.8
+        // version,  // 4.3.1
+        // status,   // 4.3.2
+        // links,    // 4.3.3
+        // time,     // 4.3.4
+        // connect,  // 4.3.5
+        // trace,    // 4.3.6
+        // admin,    // 4.3.7
+        // info,     // 4.3.8
+        privmsg,     // 4.4.1
+        // notice,   // 4.4.2
+        // who,      // 4.5.1
+        whois,       // 4.5.2
+        // whowas,   // 4.5.3
+        // kill,     // 4.6.1
+        // error,    // 4.6.4
 
         // Diverges from RFC
-        ping,
-        pong,
+        ping,        // 4.6.2
+        pong,        // 4.6.3
     };
 
 
@@ -62,107 +85,54 @@ namespace irc {
         std::variant<enum command, numeric_reply> command;
         std::vector<std::string> params;
 
-        message(std::optional<std::string> prefix, std::variant<enum command, numeric_reply> command,
+        message(std::string prefix, std::variant<enum command, numeric_reply> command,
                 std::vector<std::string> params = std::vector<std::string>());
 
-        message(std::variant<enum command, numeric_reply> command, std::vector<std::string> params = std::vector<std::string>());
+        message(std::variant<enum command, numeric_reply> command,
+                std::vector<std::string> params = std::vector<std::string>());
         message() = default;
 
         std::string to_string() const;
 
 
         static inline message no_such_nick() {
-            return message(ERR_NOSUCHNICK, { "No such nick/channel" });
+            return message("server", ERR_NOSUCHNICK, { "No such nick/channel" });
         }
 
         static inline message no_such_channel() {
-            return message(ERR_NOSUCHCHANNEL, { "No such channel" });
+            return message("server", ERR_NOSUCHCHANNEL, { "No such channel" });
         }
 
         static inline message cannot_send_to_chan() {
-            return message(ERR_CANNOTSENDTOCHAN, { "Cannot send to channel" });
+            return message("server", ERR_CANNOTSENDTOCHAN, { "Cannot send to channel" });
         }
 
         static inline message erroneus_nickname() {
-            return message(ERR_ERRONEUSNICKNAME, { "Erroneus nickname" });
+            return message("server", ERR_ERRONEUSNICKNAME, { "Erroneus nickname" });
         }
 
         static inline message nickname_in_use() {
-            return message(ERR_NICKNAMEINUSE, { "Nickname is already in use" });
+            return message("server", ERR_NICKNAMEINUSE, { "Nickname is already in use" });
         }
 
         static inline message not_on_channel() {
-            return message(ERR_NOTONCHANNEL, { "You're not on that channel" });
+            return message("server", ERR_NOTONCHANNEL, { "You're not on that channel" });
         }
 
         static inline message need_more_params(enum command cmd) {
             std::stringstream ss;
             ss << cmd;
-            return message(ERR_NEEDMOREPARAMS, { ss.str(), "Not enough parameters" });
+            return message("server", ERR_NEEDMOREPARAMS, { ss.str(), "Not enough parameters" });
         }
 
         static inline message chann_op_priv_needed() {
-            return message(ERR_CHANOPRIVSNEEDED, { "You're not channel operator" });
+            return message("server", ERR_CHANOPRIVSNEEDED, { "You're not channel operator" });
+        }
+
+        static inline message already_registered() {
+            return message("server", ERR_ALREADYREGISTERED, { "You may not reregister" });
         }
     };
-
-    /*
-    // A queue of messages sent by clients. This queue is append only and all
-    // message references never get invalidated. This means a client may hold a
-    // reference to any message for as long as it wants without risk of the
-    // reference beeing invalidated.
-    class message_queue {
-    public:
-
-        struct entry {
-            size_t client_id;
-            message message;
-        };
-
-        using queue_type = std::deque<entry>;
-
-        // A queue iterator that is not invalidated by `push_back`. This is possible
-        // since it uses indicies instead of pointers in order to track where the
-        // iterator is.
-        class const_iterator {
-        public:
-            const_iterator(const const_iterator& rhs);
-
-            bool operator<(const const_iterator& rhs ) const;
-            bool operator==(const const_iterator& rhs) const;
-            bool operator!=(const const_iterator& rhs) const;
-
-            const_iterator operator=(const const_iterator& rhs);
-
-            const entry& operator*();
-            const entry* operator->();
-            const_iterator operator++();
-            const_iterator operator++(int);
-
-        private:
-            const_iterator(const queue_type& queue, size_t idx);
-
-            const queue_type& queue() const;
-
-            std::reference_wrapper<const queue_type> _queue;
-            size_t _idx;
-
-            friend class message_queue;
-        };
-
-        message_queue();
-
-        void send_message(message message);
-        size_t size() const;
-        const_iterator cbegin() const;
-        const_iterator cend() const;
-
-    private:
-        queue_type _messages;
-
-        friend class const_iterator;
-    };
-    */
 }
 
 #endif

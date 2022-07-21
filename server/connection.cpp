@@ -52,7 +52,7 @@ void connection::poll_recv() {
     // End of the message was found! Write the message.
     std::string s;
     std::copy(_recv_buf.begin(), msg_end + 1, std::back_inserter(s));
-    _on_msg(std::move(s));
+    _on_msg(this, std::move(s));
 
     // Update the buffer to put the start of the subsequent message in the start of the buffer.
     //

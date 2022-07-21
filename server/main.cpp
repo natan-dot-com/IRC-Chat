@@ -31,20 +31,16 @@ typedef size_t connection_id_t;
 class channel {
     struct member {
         connection_id_t id;
-        // This allows easy access to the connection. If the connection is destroyed, it can be
-        // detected by the `channel` class and the member can be safely removed.
-        std::weak_ptr<irc::connection> conn;
+        irc::connection *conn;
         bool is_muted;
         bool is_operator;
     };
 
 public:
-    void add_member(std::weak_ptr<irc::connection> conn) {
-        auto ptr = conn.lock();
-        if (!ptr) return; // Connection no longer valid.
+    void add_member(irc::connection *conn) {
         auto& ref = members.emplace_back((member) {
-            .id = ptr->id(),
-            .conn = ptr,
+            .id = conn->id(),
+            .conn = conn,
             .is_muted = false,
             .is_operator = false,
         });
@@ -87,26 +83,13 @@ public:
     }
 
     void send_message(irc::message msg) {
-        // Past the end iterator for valid members of the channel.
-        auto last = members.end();
-        for (auto it = members.begin(); it != last;) {
-            // Try to promote the `weak_ptr`.
-            auto ptr = it->conn.lock();
-            if (ptr && ptr->is_connected()) {
+        for (auto it = members.begin(); it != members.end(); it++) {
+            if (it->conn->is_connected()) {
                 // Send message and advance the iterator.
-                ptr->send_message(msg.to_string());
+                it->conn->send_message(msg.to_string());
                 it++;
-            } else {
-                // If the connection is no loger valid (has been destroyed) or if it is
-                // disconnected by it is still in the channel, swap it with the last element and
-                // decrement the past the end iterator `last`. This will mark the element at `it`
-                // to be erased by the end of the loop. Here we don't increment `it` since we have
-                // just swapped it for the last element and have not yet processed it.
-                std::iter_swap(it, --last);
             }
         }
-
-        members.erase(last, members.end());
     }
 
     // If there are no other operators in the channel, promotes a new user to operator. If a user
@@ -124,8 +107,10 @@ public:
 
     bool empty() const { return members.empty(); }
 
+    std::string_view name() const { return _name; }
+
 private:
-    channel(std::string_view name, connection_id_t id, std::weak_ptr<irc::connection> conn) : name(name) {
+    channel(std::string_view name, connection_id_t id, irc::connection *conn) : _name(name) {
         members.emplace_back((member) {
             .id = id,
             .conn = conn,
@@ -136,7 +121,7 @@ private:
 
     // The name of the channel. Note that this `string_view` **must** point into the key of the map
     // of the `_channels` member in `class db`. This allows the string to be allocated just once.
-    std::string_view name;
+    std::string_view _name;
     std::vector<member> members;
 
     friend class db;
@@ -147,6 +132,7 @@ public:
     enum class conn_state {
         init,
         registered_nick,
+        registered_user,
     };
 
     struct conn_info {
@@ -156,6 +142,8 @@ public:
         // This `string_view` points into a key of the `_channels` member.
         std::optional<std::string_view> joined_channel = std::nullopt;
         std::optional<std::string> nick = std::nullopt;
+        std::optional<std::string> realname = std::nullopt;
+        std::optional<std::string> username = std::nullopt;
         conn_state state = conn_state::init;
         uint32_t ipv4;
         connection_id_t id;
@@ -163,7 +151,7 @@ public:
         conn_info(connection_id_t id, uint32_t ipv4) : id(id), ipv4(ipv4) { }
     };
 
-    void join_chan(std::weak_ptr<irc::connection> conn, std::string_view channel_name) {
+    void join_chan(irc::connection *conn, std::string_view channel_name) {
         // When creating a channel, we use the string at the key of the map `_channels` as the only
         // allocation for the channel name. All other instances of the name of the channel are
         // `string_view`s that point into this key. This is ok since the standard of C++17
@@ -178,9 +166,8 @@ public:
         //
         // so as long as the key is not removed from the map, it can be safely referenced.
 
-        auto ptr = conn.lock();
-        if (!ptr) return; // connection is no longer valid.
-        connection_id_t id = ptr->id();
+        if (!conn) return; // connection is no longer valid.
+        connection_id_t id = conn->id();
 
         auto chan_it = _channels.find(channel_name);
         if (chan_it == _channels.end()) {
@@ -191,10 +178,10 @@ public:
             auto [it, _] = _channels.emplace(channel_name, channel("", id, conn));
 
             // Now make the name of the channel point to the key.
-            it->second.name = it->first;
-            channel_name = it->second.name;
+            it->second._name = it->first;
+            channel_name = it->second._name;
         } else {
-            channel_name = chan_it->second.name;
+            channel_name = chan_it->second._name;
             chan_it->second.add_member(conn);
         }
 
@@ -301,6 +288,10 @@ public:
                 if (!i->second->is_connected()) {
                     auto info = _db.get_conn_info(id);
                     if (info.joined_channel) {
+                        auto chan = _db.get_channel(*info.joined_channel);
+                        chan->send_message(irc::message(info.nick.value(), irc::command::privmsg,
+                                                        {std::string(*info.joined_channel),
+                                                         info.nick.value() + " quit"}));
                         _db.quit_chan(id, *info.joined_channel);
                     }
                     _db.remove_connection(id);
@@ -309,8 +300,9 @@ public:
                     // interator. Therefore we must increment it **before** we erase the element.
                     i++;
                     _connections.erase(id);
+                } else {
+                    i++;
                 }
-                i++;
             }
         }
 
@@ -326,24 +318,15 @@ public:
 
         auto stream = _listener.accept();
 
-        // All this is necessary because we want to create the `shared_ptr` **before** we construct
-        // the `irc::connection`. This is because we will need a `weak_ptr` of the shared inside
-        // the closure that is passed to the constructor of `irc::connection`.
-        //
-        // This is not ideal, because the `shared_ptr` will have to allocate a separate place for
-        // the reference count. But it should work.
-        std::shared_ptr<irc::connection> ptr((irc::connection*)std::malloc(sizeof(irc::connection)));
-        new (ptr.get()) irc::connection(std::move(stream), id,
-                                        [this, ptr=std::weak_ptr(ptr)](std::string s) {
-                                            // This closure only owns a `weak_ptr`, so it won't
-                                            // cause a reference cycle.
-                                            this->handle_message(ptr.lock(), std::move(s));
-                                        });
+        auto ptr = std::make_unique<irc::connection>(std::move(stream), id,
+                                                     [this](auto ptr, std::string s) {
+                                                         this->handle_message(ptr, std::move(s));
+                                                     });
         const auto&[it, ok] = _connections.emplace(std::make_pair(id, std::move(ptr)));
         _db.register_connection(id, it->second->get_ipv4());
     }
 
-    void handle_message(std::shared_ptr<irc::connection> conn, std::string s) {
+    void handle_message(irc::connection *conn, std::string s) {
         // Should never happen!
         if (!conn) std::terminate();
         auto id = conn->id();
@@ -359,10 +342,16 @@ public:
 
         irc::command cmd = std::get<0>(message.command);
 
-        // Not registered yet.
+        // First command must be a NICK.
         if (conn_info.state == db::conn_state::init && cmd != irc::command::nick) return;
 
+        // After a NICK command, must send a USER command.
+        if (conn_info.state == db::conn_state::registered_nick && cmd != irc::command::user) return;
+
         switch (cmd) {
+            // Ignore
+            case irc::command::pong: return;
+
             case irc::command::nick:
             {
                 if (message.params.size() < 1) {
@@ -386,6 +375,30 @@ public:
                 if (conn_info.state == db::conn_state::init) {
                     conn_info.state = db::conn_state::registered_nick;
                 }
+                return;
+            }
+
+            case irc::command::user:
+            {
+                // Command: USER
+                // Parameters: <username> <hostname> <servername> <realname>
+                //
+                // For the purposes of this implementation, <hostname> and <servername> are
+                // ignored.
+
+                if (message.params.size() < 4) {
+                    conn->send_message(irc::message::need_more_params(cmd));
+                    return;
+                }
+
+                if (conn_info.state == db::conn_state::registered_user) {
+                    conn->send_message(irc::message::already_registered());
+                    return;
+                }
+
+                conn_info.username = message.params.at(0);
+                conn_info.realname = message.params.at(3);
+                conn_info.state = db::conn_state::registered_user;
                 return;
             }
 
@@ -471,13 +484,13 @@ public:
 
             case irc::command::whois:
             {
-                auto target_id = _db.get_conn_info_by_nick(message.params.at(0));
-                if (!target_id) {
+                auto target = _db.get_conn_info_by_nick(message.params.at(0));
+                if (!target) {
                     conn->send_message(irc::message::no_such_nick());
                     return;
                 }
 
-                uint32_t ipv4 = target_id->ipv4;
+                uint32_t ipv4 = target->ipv4;
 
                 std::ostringstream ss;
                 ss << ((ipv4 >> 24) & 0xff) << "."
@@ -485,7 +498,10 @@ public:
                    << ((ipv4 >>  8) & 0xff) << "."
                    << (ipv4 & 0xff);
 
-                conn->send_message(irc::message(irc::RPL_WHOISUSER, { "<user>", ss.str(), "*", "<real name>" }));
+                conn->send_message(irc::message(irc::RPL_WHOISUSER,
+                                                {target->username.value_or("uknown"),
+                                                 ss.str(), "*",
+                                                 target->realname.value_or("uknown")}));
                 return;
             }
 
@@ -525,7 +541,18 @@ public:
 
             case irc::command::quit:
             {
+                std::string quit_msg = *conn_info.nick + " quit";
+                if (message.params.size() >= 1) {
+                    quit_msg = message.params.at(1);
+                }
+
                 std::cout << "client " << id << " quitting now" << std::endl;
+                if (conn_info.joined_channel) {
+                    auto chan = _db.get_channel(*conn_info.joined_channel);
+                    chan->send_message(irc::message(*conn_info.nick, irc::command::privmsg, { quit_msg }));
+                    _db.quit_chan(id, *conn_info.joined_channel);
+                    conn_info.joined_channel = std::nullopt;
+                }
                 // Just mark it as disconnected and close the connection. The actual connection
                 // object will be destroyed in the `run` loop sometime soon.
                 conn->disconnect();
@@ -573,20 +600,18 @@ public:
                 std::cout << "client " << kicked_nick << " was kicked" << std::endl;
                 return;
             }
-
-            default: UNIMPLEMENTED();
         }
     }
 
 private:
     db _db;
     connection_id_t _curr_id_count = 0;
-    std::map<connection_id_t, std::shared_ptr<irc::connection>> _connections;
+    std::map<connection_id_t, std::unique_ptr<irc::connection>> _connections;
     tcplistener _listener;
     poll_registry::token_type _listener_tok;
 };
 
-int main() {
+int main(int argc, char *argv[]) {
     server server(PORT);
     server.run();
 

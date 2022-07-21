@@ -3,7 +3,7 @@ BUILDDIR := build
 SERVER_DEPS := $(patsubst ./server/%.cpp,$(BUILDDIR)/server/%.o,$(wildcard ./server/*.cpp))
 CLIENT_DEPS := $(BUILDDIR)/client/client.o $(BUILDDIR)/client/main.o $(BUILDDIR)/client/utils.o
 
-CFLAGS = -g -std=c++17
+CFLAGS = -fsanitize=address -g -std=c++17
 
 all: server client
 
