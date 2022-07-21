@@ -105,13 +105,23 @@ namespace irc {
             _db.register_connection(id, it->second->get_ipv4());
         }
 
+        std::optional<std::string_view> get_chan_name(std::string_view param, db::conn_info& conn_info) {
+            // This diverges from the RFC. Originally the command would have to provide a
+            // channel name. However, in this implementation a client can only be in one
+            // channel at a time. So this `---` special channel name means "whatever
+            // channel the client happens to be on".
+            if (param == "---") {
+                if (!conn_info.joined_channel) return std::nullopt;
+                return *conn_info.joined_channel;
+            }
+            return param;
+        }
+
         void handle_message(irc::connection *conn, std::string s) {
             // Should never happen!
             if (!conn) std::terminate();
             auto id = conn->id();
             auto& conn_info = _db.get_conn_info(id);
-
-            std::cout << "HANDLING MESSAGE " << std::endl;
 
             irc::message message;
             try {
@@ -123,13 +133,17 @@ namespace irc {
 
             irc::command cmd = std::get<0>(message.command);
 
-            std::cout << "RECV: " << std::quoted(message.to_string()) << std::endl;
-
             // First command must be a NICK.
-            if (conn_info.state == db::conn_state::init && cmd != irc::command::nick) return;
+            if (conn_info.state == db::conn_state::init && cmd != irc::command::nick) {
+                std::cerr << "Ignoring unexpected message. Expected 'NICK' commmand" << std::endl;
+                return;
+            }
 
             // After a NICK command, must send a USER command.
-            if (conn_info.state == db::conn_state::registered_nick && cmd != irc::command::user) return;
+            if (conn_info.state == db::conn_state::registered_nick && cmd != irc::command::user) {
+                std::cerr << "Ignoring unexpected message. Expected 'USER' command. Got '" << s << "'" << std::endl;
+                return;
+            }
 
             switch (cmd) {
                 // Ignore
@@ -182,6 +196,10 @@ namespace irc {
                     conn_info.username = message.params.at(0);
                     conn_info.realname = message.params.at(3);
                     conn_info.state = db::conn_state::registered_user;
+
+                    std::cout << "registered user with username '"
+                              << *conn_info.username << "' and real name '"
+                              << *conn_info.realname << "'" << std::endl;
                     return;
                 }
 
@@ -213,9 +231,13 @@ namespace irc {
                     if (conn_info.joined_channel) _db.quit_chan(id, *conn_info.joined_channel);
 
                     auto& chan = _db.join_chan(conn, chan_name);
+                    auto member = chan.get_member(id);
+                    std::stringstream ss;
+                    ss << conn_info.nick.value();
+                    ss << " joined " << chan_name;
+                    if (member->is_operator) ss << " as moderator";
                     chan.send_message(irc::message("system", command::privmsg,
-                                                   {chan_name,
-                                                    conn_info.nick.value() + " joined"}));
+                                                   {chan_name, ss.str()}));
                     return;
                 }
 
@@ -226,7 +248,13 @@ namespace irc {
                         return;
                     }
 
-                    const auto& chan_name = message.params.at(0);
+                    auto opt_chan_name = get_chan_name(message.params.at(0), conn_info);
+                    if (!opt_chan_name) {
+                        conn->send_message(irc::message::not_on_channel());
+                        return;
+                    }
+                    std::string_view chan_name = *opt_chan_name;
+
                     auto chan = _db.get_channel(chan_name);
 
                     if (!chan) {
@@ -253,8 +281,8 @@ namespace irc {
                     }
 
                     bool ok = true;
-                    if      (modifiers.find("+v") != std::string::npos) ok = chan->mute(target_id->id);
-                    else if (modifiers.find("-v") != std::string::npos) ok = chan->unmute(target_id->id);
+                    if      (modifiers.find("+v") != std::string::npos) ok = chan->unmute(target_id->id);
+                    else if (modifiers.find("-v") != std::string::npos) ok = chan->mute(target_id->id);
 
                     if (!ok) {
                         // TODO: Should probably be a better message. This happens when trying to alter
@@ -270,6 +298,26 @@ namespace irc {
 
                 case irc::command::whois:
                 {
+                    if (message.params.size() < 1) {
+                        conn->send_message(irc::message::need_more_params(cmd));
+                        return;
+                    }
+
+                    // I think this diverges from the RFC. As per the RFC, anyone can ask who is
+                    // anyone else in my understanding.
+
+                    if (!conn_info.joined_channel) {
+                        conn->send_message(irc::message::not_on_channel());
+                        return;
+                    }
+
+                    auto chan = _db.get_channel(*conn_info.joined_channel);
+                    auto member = chan->get_member(id);
+                    if (!member->is_operator) {
+                        conn->send_message(irc::message::chann_op_priv_needed());
+                        return;
+                    }
+
                     auto target = _db.get_conn_info_by_nick(message.params.at(0));
                     if (!target) {
                         conn->send_message(irc::message::no_such_nick());
@@ -298,8 +346,14 @@ namespace irc {
                         return;
                     }
 
-                    std::string_view channel_name = message.params.at(0);
-                    auto chan = _db.get_channel(channel_name);
+                    auto opt_chan_name = get_chan_name(message.params.at(0), conn_info);
+                    if (!opt_chan_name) {
+                        conn->send_message(irc::message::not_on_channel());
+                        return;
+                    }
+                    std::string_view chan_name = *opt_chan_name;
+
+                    auto chan = _db.get_channel(chan_name);
                     if (!chan) {
                         conn->send_message(irc::message::no_such_channel());
                         return;
@@ -317,11 +371,10 @@ namespace irc {
                     }
 
                     std::cout << "client " << id << " sent message " << std::quoted(message.params.back())
-                              << " on channel " << channel_name << std::endl;
+                              << " on channel " << chan_name << std::endl;
 
-                    auto nick = conn_info.nick.value();
-                    message.prefix = nick;
-                    chan->send_message(message);
+                    auto& nick = conn_info.nick.value();
+                    chan->send_message(irc::message(nick, irc::command::privmsg, { std::string(chan_name), message.params.back() }));
                     return;
                 }
 
@@ -352,7 +405,13 @@ namespace irc {
                         return;
                     }
 
-                    std::string& chan_name = message.params.at(0);
+                    auto opt_chan_name = get_chan_name(message.params.at(0), conn_info);
+                    if (!opt_chan_name) {
+                        conn->send_message(irc::message::not_on_channel());
+                        return;
+                    }
+                    std::string_view chan_name = *opt_chan_name;
+
                     auto chan = _db.get_channel(chan_name);
                     if (!chan) {
                         conn->send_message(irc::message::not_on_channel());

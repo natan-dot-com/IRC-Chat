@@ -1,16 +1,20 @@
 #ifndef _CLIENT_H_
 #define _CLIENT_H_
 
-#include <bits/stdc++.h>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <cstdint>
+
 #include <sys/socket.h>
 #include <arpa/inet.h>
 
 class client {
 public:
-
     client();
+    ~client();
 
-    int connect(int serverPort);
+    int connect(int server_port);
     int send(std::string msg);
     int recv(std::string& rsp);
 

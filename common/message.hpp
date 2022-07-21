@@ -14,7 +14,6 @@
 namespace irc {
     enum numeric_reply {
         RPL_WHOISUSER = 311,
-        RPL_CHANNELMODEIS = 324,
         ERR_NOSUCHNICK = 401,
         ERR_NOSUCHCHANNEL = 403,
         ERR_CANNOTSENDTOCHAN = 404,

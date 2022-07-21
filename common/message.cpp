@@ -1,6 +1,8 @@
 #include <charconv>
 #include <sstream>
 #include <iterator>
+#include <cctype>
+#include <charconv>
 
 #include <sys/eventfd.h>
 #include <unistd.h>
@@ -40,7 +42,7 @@ namespace irc {
             s = s.substr(space_idx + 1);
         }
 
-        irc::command command;
+        std::variant<irc::command, irc::numeric_reply> command;
         auto space_idx = s.find(" ");
         if (space_idx == std::string_view::npos) space_idx = s.size() - 1;
         auto cmd_name = s.substr(0, space_idx);
@@ -58,6 +60,12 @@ namespace irc {
         else if (cmd_name == "MODE"    ) command = irc::command::mode;
         else if (cmd_name == "QUIT"    ) command = irc::command::quit;
         else if (cmd_name == "KICK"    ) command = irc::command::kick;
+        else if (cmd_name.size() == 3 && std::all_of(cmd_name.cbegin(), cmd_name.cend(), static_cast<int(*)(int)>(&std::isdigit))) {
+            int n = 0;
+            auto res = std::from_chars(cmd_name.data(), cmd_name.data() + cmd_name.size(), n);
+            if (res.ptr == cmd_name.data()) throw parse_error("invalid numeric reply");
+            command = (irc::numeric_reply)n;
+        }
         else throw parse_error("unsupported command");
 
         std::vector<std::string> params;
