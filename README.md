@@ -1,5 +1,7 @@
 # Redes de Computadores - Internet Relay Chat
 
+> Este trabalho pode ser acessado pelo [Github](https://github.com/natan-dot-com/Internet-Relay-Chat), nele pode ser acessado o link do vídeo
+
 ### Autores
 
 - Natan Henrique Sanches (11795680)
