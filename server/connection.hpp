@@ -8,7 +8,7 @@
 #include <vector>
 
 #include "tcpstream.hpp"
-#include "../common/message.hpp"
+#include "message.hpp"
 #include "poll_registry.hpp"
 
 namespace irc {

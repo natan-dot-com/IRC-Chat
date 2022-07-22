@@ -10,6 +10,8 @@
 
 class tcpstream {
 public:
+    static tcpstream connect(const char *ip, uint16_t port);
+
     tcpstream(tcpstream&& rhs);
     tcpstream(const tcpstream&) = delete;
     ~tcpstream();

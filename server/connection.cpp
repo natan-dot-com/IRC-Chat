@@ -8,7 +8,7 @@
 
 #include "tcpstream.hpp"
 #include "connection.hpp"
-#include "../common/utils.hpp"
+#include "utils.hpp"
 #include "poll_registry.hpp"
 
 #define MSG_SIZE_LIMIT 4096

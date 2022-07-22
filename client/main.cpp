@@ -9,10 +9,14 @@
 
 #include <ncurses.h>
 
-#include "client.hpp"
+#include <sys/epoll.h>
+
 #include "config.hpp"
-#include "../common/utils.hpp"
-#include "../common/message.hpp"
+#include "tcplistener.hpp"
+#include "utils.hpp"
+#include "message.hpp"
+
+using namespace std::literals::chrono_literals;
 
 std::mutex print_mutex;
 std::atomic<bool> RUN(true);
@@ -45,7 +49,7 @@ std::string read_line(WINDOW* w) {
     return buf;
 }
 
-void send_message(WINDOW* w, client& cli) {
+void send_message(WINDOW* w, tcpstream& cli) {
     while (RUN) {
         std::string input = read_line(w);
         if (input == "/ping") {
@@ -91,32 +95,51 @@ void send_message(WINDOW* w, client& cli) {
             input = "PRIVMSG --- :" + input;
         }
 
+        input.push_back('\n');
         std::string_view slice = input;
 
-        while (slice.size() > 0) {
+        while (slice.size() > 0 && RUN) {
+            // Get the substring within the maximum allowed size
             std::string s(slice.substr(0, MAX_SIZE));
-            if (s.size() < MAX_SIZE) s.push_back('\n');
-            int ret = cli.send(std::move(s));
-            if (ret < 0) THROW_ERRNO("send failed");
-            slice = slice.substr(std::min((size_t)MAX_SIZE, slice.size()));
+
+            std::string_view to_send = s;
+            while (to_send.size() > 0) {
+                int nsent = cli.send(reinterpret_cast<const uint8_t*>(s.data()), s.size());
+                if (nsent < 0) THROW_ERRNO("send failed");
+                if (nsent == 0) {
+                    RUN = false;
+                    break;
+                }
+                to_send = to_send.substr(nsent);
+            }
+
+            slice = slice.substr(s.size());
         }
     }
 }
 
-void recv_message(WINDOW* w, client& cli) {
+void recv_message(WINDOW* w, tcpstream& cli) {
+    std::array<uint8_t, MAX_SIZE> recv_buf;
+    std::string msg_str;
     while (RUN) {
-        std::string resp;
-        int nread = cli.recv(resp);
+        int nread = cli.recv(recv_buf.data(), recv_buf.size());
         if (nread < 0) THROW_ERRNO("recv failed");
         if (nread == 0) {
             RUN = false;
             break;
         }
 
+        msg_str.append(recv_buf.cbegin(), recv_buf.cbegin() + nread);
+        size_t end_pos = msg_str.find('\n');
+        // Not a full message yet
+        if (end_pos == std::string::npos) continue;
+
         irc::message msg;
         try {
-            msg = irc::message::parse(resp);
+            msg = irc::message::parse(std::string_view(msg_str).substr(0, end_pos + 1));
+            msg_str = msg_str.substr(end_pos + 1);
         } catch (irc::message::parse_error e) {
+            msg_str = msg_str.substr(end_pos + 1);
             std::scoped_lock<std::mutex> lock(print_mutex);
             wprintw(w, "%s\n", e.what());
             wrefresh(w);
@@ -159,11 +182,7 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
 
-    client cli;
-    if (cli.connect(argv[1], atoi(argv[2]))) {
-        std::cout << "Connection can't be reached" << std::endl;
-        return EXIT_FAILURE;
-    }
+    tcpstream cli = tcpstream::connect(argv[1], static_cast<uint16_t>(atoi(argv[2])));
 
     initscr();
     noecho();
