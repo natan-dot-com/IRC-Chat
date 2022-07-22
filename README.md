@@ -26,8 +26,8 @@ make
 ./build/server/main
 
 # Roda o client
-./build/client/main 8080
-#                   ^^^^~~~ porta para se conectar.
+./build/client/main <ip_do_servidor> 8080
+#                                    ^^^^~~~ porta para se conectar.
 ```
 
 ## Comandos
@@ -49,4 +49,4 @@ Neste projeto, foram implementados os comandos do protocolo [RFC 1459](https://d
 |`/unmute <Apelido>`|Restaura a permissão de um determinado usuário de mandar mensagens|Somente administrador|
 |`/whois <Apelido>`|Visualiza informações (incluindo o IP) de determinado usuário|Somente administrador|
 
-Em nossa implementação, o comando `nickname` é mandatório e deve ser o primeiro utilizado após estabelecimento da conexão. Seguido dele, deve ser utilizado o comando `user` para dar informações sobre o cliente que está se conectando. Após isso, o usuário terá acesso ao restante dos comandos.
+Em nossa implementação, o comando `connect` é executado automaticamente por parte do cliente. Além disso, o comando `nickname` é mandatório e deve ser o primeiro utilizado após estabelecimento da conexão. Seguido dele, deve ser utilizado o comando `user` para dar informações sobre o cliente que está se conectando. Após isso, o usuário terá acesso ao restante dos comandos.
