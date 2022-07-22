@@ -15,10 +15,10 @@ CPPFLAGS = -fsanitize=address -g -std=c++17 $(INCLUDE_FLAGS)
 all: server client
 
 run_server: server
-	./$(BUILDDIR)/server/main
+	@./$(BUILDDIR)/server/main
 
 run_client: client
-	./$(BUILDDIR)/client/main
+	@./$(BUILDDIR)/client/main
 
 server: $(BUILDDIR)/server/main
 

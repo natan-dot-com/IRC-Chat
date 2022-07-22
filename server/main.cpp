@@ -17,11 +17,11 @@
 #include <poll.h>
 
 #include "tcpstream.hpp"
-#include "../common/message.hpp"
+#include "message.hpp"
 #include "poll_registry.hpp"
 #include "tcplistener.hpp"
 #include "connection.hpp"
-#include "../common/utils.hpp"
+#include "utils.hpp"
 #include "db.hpp"
 #include "channel.hpp"
 
@@ -135,7 +135,7 @@ namespace irc {
 
             // First command must be a NICK.
             if (conn_info.state == db::conn_state::init && cmd != irc::command::nick) {
-                std::cerr << "Ignoring unexpected message. Expected 'NICK' commmand" << std::endl;
+                std::cerr << "Ignoring unexpected message. Expected 'NICK' commmand. Got '" << s << "'" << std::endl;
                 return;
             }
 
