@@ -257,9 +257,9 @@ int main(int argc, char *argv[]) {
 
     shutdown_eventfd = eventfd(0, EFD_CLOEXEC);
 
-    // std::signal(SIGINT, [](int){
-    //     shutdown(shutdown_eventfd);
-    // });
+    std::signal(SIGINT, [](int){
+        shutdown(shutdown_eventfd);
+    });
 
     tcpstream cli = tcpstream::connect(argv[1], static_cast<uint16_t>(atoi(argv[2])));
 
