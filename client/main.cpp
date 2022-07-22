@@ -85,6 +85,8 @@ void send_message(WINDOW* w, tcpstream& cli, int shutdown_eventfd) {
 
     std::string recv_buf;
     while (RUN) {
+        // Will wait until either there is something to read from stdin or the shutdown event is
+        // emitted and the thread should stop blocking in order to exit.
         if (epoll_wait(epollfd, &ev, 1, -1) < 0)
             THROW_ERRNO("epoll_wait failed");
 
@@ -132,7 +134,7 @@ void send_message(WINDOW* w, tcpstream& cli, int shutdown_eventfd) {
             wprintw(w, "%s\n", input.c_str());
             wrefresh(w);
         } else if (input.find("/kick") == 0) {
-            input = "KICK " + input.substr(6);
+            input = "KICK --- " + input.substr(6);
         } else if (input.find("/mute") == 0) {
             input = "MODE --- -v " + input.substr(6);
         } else if (input.find("/unmute") == 0) {
@@ -188,6 +190,9 @@ void recv_message(WINDOW* w, tcpstream& cli, int shutdown_eventfd) {
         THROW_ERRNO("epoll_ctl failed");
 
     while (RUN) {
+        // Wait for either the the client fd becomes ready to read or the shutdown notification is
+        // received. In case of the shutdown event, the thread needs to stop blocking in order to
+        // exit.
         if (epoll_wait(epollfd, &ev, 1, -1) < 0)
             THROW_ERRNO("epoll_wait failed");
 
