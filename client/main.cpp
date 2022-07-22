@@ -6,10 +6,12 @@
 #include <atomic>
 #include <iostream>
 #include <thread>
+#include <csignal>
 
 #include <ncurses.h>
 
 #include <sys/epoll.h>
+#include <sys/eventfd.h>
 
 #include "config.hpp"
 #include "tcplistener.hpp"
@@ -21,42 +23,88 @@ using namespace std::literals::chrono_literals;
 std::mutex print_mutex;
 std::atomic<bool> RUN(true);
 
-std::string read_line(WINDOW* w) {
-    std::string buf;
-    int ch;
+enum class read_line_result {
+    reading,
+    ready,
+    eof,
+};
 
-    do {
-        ch = wgetch(w);
-        if (ch == KEY_BACKSPACE && !buf.empty()) {
-            buf.pop_back();
-            std::scoped_lock<std::mutex> lock(print_mutex);
-            wmove(w, 0, 0);
-            wclrtoeol(w);
-            wprintw(w, "%s", buf.c_str());
-            wrefresh(w);
-        } else if (isprint(ch)) {
-            buf.push_back(ch);
-            std::scoped_lock<std::mutex> lock(print_mutex);
-            wprintw(w, "%c", ch);
-            wrefresh(w);
-        }
-    } while (RUN && ch != '\n');
+read_line_result read_line(std::string& buf, WINDOW* w) {
+    int ch = wgetch(w);
+    if (ch == KEY_BACKSPACE && !buf.empty()) {
+        buf.pop_back();
+        std::scoped_lock<std::mutex> lock(print_mutex);
+        wmove(w, 0, 0);
+        wclrtoeol(w);
+        wprintw(w, "%s", buf.c_str());
+        wrefresh(w);
+    } else if (isprint(ch)) {
+        buf.push_back(ch);
+        std::scoped_lock<std::mutex> lock(print_mutex);
+        wprintw(w, "%c", ch);
+        wrefresh(w);
+    } else if (ch == 4 /* Ctrl + D sends End-of-Transmission char */) {
+        return read_line_result::eof;
+    }
+    if (ch != '\n') return read_line_result::reading;
 
     std::scoped_lock<std::mutex> lock(print_mutex);
     wmove(w, 0, 0);
     wclrtoeol(w);
+    wrefresh(w);
 
-    return buf;
+    return read_line_result::ready;
 }
 
-void send_message(WINDOW* w, tcpstream& cli) {
+void shutdown(int shutdown_eventfd) {
+    RUN = false;
+    // Notifiy sleeping threads that we should shutdown
+    uint64_t val = 0xff;
+    if (::write(shutdown_eventfd, &val, sizeof val) < 0)
+        THROW_ERRNO("write to eventfd failed");
+}
+
+// Send message loop. This thread will listen for user input and send them to the server when enter
+// is pressed. The eventfd will wakeup the thread if it is blocking but should wakeup (probably
+// because it should shutdown or stop running).
+void send_message(WINDOW* w, tcpstream& cli, int shutdown_eventfd) {
+    int epollfd = epoll_create1(0);
+    if (epollfd < 0) THROW_ERRNO("epoll_create1 failed");
+
+    struct epoll_event ev;
+
+    ev.events = EPOLLIN;
+    ev.data.fd = STDIN_FILENO;
+    if (epoll_ctl(epollfd, EPOLL_CTL_ADD, STDIN_FILENO, &ev) < 0)
+        THROW_ERRNO("epoll_ctl failed");
+
+    ev.events = EPOLLIN;
+    ev.data.fd = shutdown_eventfd;
+    if (epoll_ctl(epollfd, EPOLL_CTL_ADD, shutdown_eventfd, &ev) < 0)
+        THROW_ERRNO("epoll_ctl failed");
+
+    std::string recv_buf;
     while (RUN) {
-        std::string input = read_line(w);
+        if (epoll_wait(epollfd, &ev, 1, -1) < 0)
+            THROW_ERRNO("epoll_wait failed");
+
+        if (ev.data.fd != STDIN_FILENO) continue;
+
+        switch (read_line(recv_buf, w)) {
+            case read_line_result::reading: continue;
+            case read_line_result::ready: break;
+            case read_line_result::eof:
+                shutdown(shutdown_eventfd);
+                // Can't just use break since that would only break out of the switch.
+                continue;
+        }
+
+        std::string input = std::exchange(recv_buf, std::string());
         if (input == "/ping") {
             input = "PING";
         } else if (input == "/quit") {
             input = "QUIT";
-            RUN = false;
+            shutdown(shutdown_eventfd);
         } else if (input.find("/join") == 0) {
             input = "JOIN " + input.substr(6);
         } else if (input.find("/nickname") == 0) {
@@ -98,7 +146,7 @@ void send_message(WINDOW* w, tcpstream& cli) {
         input.push_back('\n');
         std::string_view slice = input;
 
-        while (slice.size() > 0 && RUN) {
+        while (slice.size() > 0) {
             // Get the substring within the maximum allowed size
             std::string s(slice.substr(0, MAX_SIZE));
 
@@ -107,25 +155,48 @@ void send_message(WINDOW* w, tcpstream& cli) {
                 int nsent = cli.send(reinterpret_cast<const uint8_t*>(s.data()), s.size());
                 if (nsent < 0) THROW_ERRNO("send failed");
                 if (nsent == 0) {
-                    RUN = false;
+                    shutdown(shutdown_eventfd);
                     break;
                 }
                 to_send = to_send.substr(nsent);
             }
+            if (!RUN) break;
 
             slice = slice.substr(s.size());
         }
     }
 }
 
-void recv_message(WINDOW* w, tcpstream& cli) {
+// Receive thread. This receives data from the server and displays it in the chat view. The eventfd
+// will wakeup the thread if it is suposed to shutdown, but is blocking.
+void recv_message(WINDOW* w, tcpstream& cli, int shutdown_eventfd) {
     std::array<uint8_t, MAX_SIZE> recv_buf;
     std::string msg_str;
+
+    int epollfd = epoll_create1(0);
+    if (epollfd < 0) THROW_ERRNO("epoll_create1 failed");
+
+    struct epoll_event ev;
+    ev.events = EPOLLIN;
+    ev.data.fd = cli.fd();
+    if (epoll_ctl(epollfd, EPOLL_CTL_ADD, cli.fd(), &ev) < 0)
+        THROW_ERRNO("epoll_ctl failed");
+
+    ev.events = EPOLLIN;
+    ev.data.fd = shutdown_eventfd;
+    if (epoll_ctl(epollfd, EPOLL_CTL_ADD, shutdown_eventfd, &ev) < 0)
+        THROW_ERRNO("epoll_ctl failed");
+
     while (RUN) {
+        if (epoll_wait(epollfd, &ev, 1, -1) < 0)
+            THROW_ERRNO("epoll_wait failed");
+
+        if (ev.data.fd != cli.fd()) continue;
+
         int nread = cli.recv(recv_buf.data(), recv_buf.size());
         if (nread < 0) THROW_ERRNO("recv failed");
         if (nread == 0) {
-            RUN = false;
+            shutdown(shutdown_eventfd);
             break;
         }
 
@@ -182,6 +253,14 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
 
+    static int shutdown_eventfd;
+
+    shutdown_eventfd = eventfd(0, EFD_CLOEXEC);
+
+    // std::signal(SIGINT, [](int){
+    //     shutdown(shutdown_eventfd);
+    // });
+
     tcpstream cli = tcpstream::connect(argv[1], static_cast<uint16_t>(atoi(argv[2])));
 
     initscr();
@@ -208,8 +287,8 @@ int main(int argc, char *argv[]) {
     wprintw(stdscr, "Connection established\n");
     wrefresh(stdscr);
 
-    std::thread sender(send_message, input, std::ref(cli));
-    std::thread receiver(recv_message, recv_chat, std::ref(cli));
+    std::thread sender(send_message, input, std::ref(cli), shutdown_eventfd);
+    std::thread receiver(recv_message, recv_chat, std::ref(cli), shutdown_eventfd);
 
     sender.join();
     receiver.join();
