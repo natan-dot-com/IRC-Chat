@@ -59,8 +59,6 @@ namespace irc {
                     THROW_ERRNO("poll failed");
                 }
 
-                std::vector<connection_id_t> to_remove;
-
                 // All connections that are about to close, quit all of their channels.
                 for (auto i = _connections.begin(); i != _connections.end();) {
                     connection_id_t id = i->second->id();
@@ -89,8 +87,6 @@ namespace irc {
         }
 
         void poll_accept() {
-            // TODO: This cannot be because then if a user exists and reenters, he could end up with the same
-            // id as another one.
             connection_id_t id = _curr_id_count++;
 
             std::cout << "client " << id << " connected" << std::endl;
@@ -441,6 +437,7 @@ namespace irc {
                         conn->send_message(irc::message::not_on_channel());
                         return;
                     }
+                    kicked->joined_channel = std::nullopt;
 
                     std::cout << "client " << kicked_nick << " was kicked" << std::endl;
                     return;
